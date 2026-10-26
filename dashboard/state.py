@@ -1,0 +1,283 @@
+"""Session state, workflow actions and callbacks. No HTML here: presentation lives elsewhere.
+
+Security decisions (approval gating, path safety, redaction) are enforced in devsecops_agent;
+this module only wires user actions to those backend operations.
+"""
+from __future__ import annotations
+
+import os
+import re
+from datetime import datetime, timezone
+
+import streamlit as st
+
+from devsecops_agent import ai as ai_mod
+from devsecops_agent import deploy, export, github_io, intake, monitor, remediation
+from devsecops_agent import report as report_mod
+from devsecops_agent.models import Check
+from devsecops_agent.safe_zip import UnsafeArchiveError
+from devsecops_agent.scanners import scan_project
+
+S = st.session_state
+
+SCOPES = {
+    "p2": {"decisions": "decisions", "logged": "logged", "apply": "apply_result", "label": "remediation"},
+    "p5": {"decisions": "decisions5", "logged": "logged5", "apply": "apply5", "label": "post-deployment"},
+}
+
+
+def cfg_get(key: str):
+    try:
+        value = st.secrets.get(key)
+    except Exception:
+        value = None
+    return (str(value) if value else None) or os.environ.get(key)
+
+
+def safe_name(name: str, limit: int = 40) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", str(name))[:limit].strip("-.") or "project"
+
+
+def _defaults() -> dict:
+    return {
+        "stage": 1, "project": None, "scan": None, "ai": None, "plan": [], "decisions": {}, "logged": set(),
+        "apply_result": None, "corrected": None, "zip_bytes": None, "residual": None,
+        "deployment": None, "deploy_err": "", "live_files": None, "baseline": None, "history": [],
+        "rescan_new": [], "last_scan": None, "last_rescan": None, "plan5": [], "decisions5": {},
+        "logged5": set(), "apply5": None, "gh_access": None, "gh_result": None, "audit": [],
+        "gitlab_session": None, "gitlab_output": [], "gitlab_msg": "", "gitlab_ok": "",
+    }
+
+
+def init_state() -> None:
+    for key, value in _defaults().items():
+        if key not in S:
+            S[key] = value
+    if "branch_default" not in S:
+        S["branch_default"] = "lxnoro-agent/fixes-" + datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+
+
+def reset_workflow() -> None:
+    for key, value in _defaults().items():
+        S[key] = value
+
+
+# ---------------------------------------------------------------- navigation
+
+def reach() -> dict:
+    return {
+        1: True, 2: S.project is not None, 3: S.scan is not None, 4: S.scan is not None,
+        5: S.scan is not None, 6: S.corrected is not None, 7: S.deployment is not None,
+    }
+
+
+def done_map() -> dict:
+    return {
+        1: S.project is not None, 2: S.scan is not None, 3: S.scan is not None,
+        4: S.apply_result is not None, 5: S.zip_bytes is not None, 6: S.deployment is not None,
+        7: len(S.history) > 1,
+    }
+
+
+def nav_states() -> dict:
+    can, done = reach(), done_map()
+    states = {}
+    for n in range(1, 8):
+        if n == S.stage:
+            states[n] = "active"
+        elif not can[n]:
+            states[n] = "locked"
+        else:
+            states[n] = "done" if done[n] else "ready"
+    return states
+
+
+def goto(n: int) -> None:
+    if reach().get(n):
+        S.stage = n
+
+
+# ---------------------------------------------------------------- derived data
+
+def current_report() -> dict:
+    statuses = S.apply_result.statuses if S.apply_result else {}
+    notes = S.ai.notes if S.ai else {}
+    label = S.ai.label if S.ai else ""
+    return report_mod.build_report(S.project.name, S.scan, notes, label, statuses)
+
+
+def residual_scan():
+    if S.residual is None:
+        S.residual = scan_project(S.corrected, list(S.project.binary_files))
+    return S.residual
+
+
+def pending_count() -> int:
+    statuses = S.apply_result.statuses if S.apply_result else {}
+    return sum(
+        1 for r in S.plan
+        if r.needs_approval and statuses.get(r.finding_id, "pending_approval") == "pending_approval"
+    )
+
+
+# ---------------------------------------------------------------- actions
+
+def load_project(loader, label: str) -> None:
+    ok = False
+    with st.status(f"Importing via {label}: validating (nothing is executed)...", expanded=True) as status:
+        try:
+            project = loader()
+        except (UnsafeArchiveError, github_io.GitHubError) as exc:
+            status.update(label="Import rejected", state="error")
+            st.error(str(exc))
+            return
+        except Exception as exc:
+            status.update(label="Import failed", state="error")
+            st.error(f"Unexpected error ({type(exc).__name__}). The project was not loaded.")
+            return
+        reset_workflow()
+        S.project = project
+        remediation.audit_event(S.audit, "system", "project_loaded", "intake",
+                                detail=f"{project.name} via {project.source}; {len(project.text_files)} text file(s)")
+        status.update(label="Project validated and loaded", state="complete")
+        ok = True
+    if ok:
+        S.stage = 2
+        st.rerun()
+
+
+def run_analysis(provider_id: str) -> None:
+    bar = st.progress(5, text="Running deterministic checks (static; nothing is executed)...")
+    scan = scan_project(S.project.text_files, list(S.project.binary_files))
+    bar.progress(55, text="Deterministic checks complete.")
+    ai_res = None
+    cfg = ai_mod.load_config(cfg_get) if provider_id == "external" else None
+    if provider_id == "external" and cfg:
+        def tick(i, n):
+            bar.progress(55 + int(40 * i / max(n, 1)), text=f"AI explanations {i}/{n}...")
+
+        ai_res = ai_mod.explain_findings(cfg, scan.findings, progress=tick)
+        detail = f"{len(ai_res.notes)} of {ai_res.attempted} explanation(s) from {ai_res.label}"
+        if ai_res.failed:
+            detail += f"; {ai_res.failed} failed ({', '.join(sorted(set(ai_res.errors)))})"
+        scan.checks.append(Check("AI explanations (external API)", "performed" if ai_res.ok else "unavailable", detail))
+    elif provider_id == "gitlab":
+        scan.checks.append(Check("AI triage (GitLab Duo Agent Platform)", "skipped",
+                                 "Asynchronous: submit it below; results are produced inside GitLab."))
+    else:
+        scan.checks.append(Check("AI explanations", "unavailable", "No AI provider selected; deterministic results only."))
+    S.scan, S.ai = scan, ai_res
+    S.plan = remediation.plan_remediations(S.project.text_files, scan.findings)
+    S.decisions, S.logged, S.apply_result = {}, set(), None
+    S.corrected, S.zip_bytes, S.residual = None, None, None
+    S.deployment, S.live_files, S.baseline, S.history = None, None, None, []
+    S.gitlab_session, S.gitlab_output, S.gitlab_msg, S.gitlab_ok = None, [], "", ""
+    remediation.audit_event(S.audit, "system", "analysis_completed", "analysis",
+                            detail=f"{len(scan.findings)} finding(s); AI explanations: {'yes' if ai_res and ai_res.ok else 'no'}")
+    bar.progress(100, text="Analysis complete.")
+
+
+def gitlab_test() -> None:
+    cfg = ai_mod.load_gitlab_config(cfg_get)
+    if not cfg:
+        S.gitlab_msg, S.gitlab_ok = "GitLab AI is not configured.", ""
+        return
+    ok, message = ai_mod.check_access(cfg)
+    S.gitlab_ok, S.gitlab_msg = (message, "") if ok else ("", message)
+
+
+def gitlab_submit() -> None:
+    cfg = ai_mod.load_gitlab_config(cfg_get)
+    if not cfg or not S.scan:
+        S.gitlab_msg = "GitLab AI is not configured or there is no scan to triage."
+        return
+    try:
+        session = ai_mod.submit_triage(cfg, S.scan.findings)
+    except ai_mod.GitLabAIError as exc:
+        S.gitlab_msg, S.gitlab_ok = str(exc), ""
+        return
+    S.gitlab_session, S.gitlab_msg, S.gitlab_output = session, "", []
+    remediation.audit_event(S.audit, "system", "gitlab_session_submitted", "analysis",
+                            detail=f"Read-only Duo session {session.id} ({session.status or 'unknown status'})")
+
+
+def gitlab_refresh() -> None:
+    cfg = ai_mod.load_gitlab_config(cfg_get)
+    if not cfg or not S.gitlab_session:
+        return
+    try:
+        S.gitlab_session = ai_mod.get_session(cfg, S.gitlab_session.id)
+        S.gitlab_output = ai_mod.get_output(cfg, S.gitlab_session.id)
+        S.gitlab_msg = ""
+    except ai_mod.GitLabAIError as exc:
+        S.gitlab_msg = str(exc)
+
+
+def decide(prefix: str, item, decision: str) -> None:
+    sc = SCOPES[prefix]
+    try:
+        remediation.record_decision(S[sc["decisions"]], S.audit, item, decision,
+                                    S.get(f"{prefix}_approver", ""), scope=sc["label"])
+        S[f"{prefix}_err"] = ""
+    except ValueError as exc:
+        S[f"{prefix}_err"] = str(exc)
+
+
+def rescan(kind: str) -> None:
+    scan = scan_project(S.live_files, list(S.project.binary_files))
+    new, resolved = monitor.record_scan(S.history, kind, scan, S.baseline)
+    S.rescan_new, S.last_scan = new, scan
+    S.last_rescan = {"kind": kind, "baseline": len(S.baseline or ()), "current": len(scan.findings),
+                     "new": len(new), "resolved": len(resolved)}
+    S.plan5 = remediation.plan_remediations(S.live_files, new)
+    remediation.audit_event(S.audit, "system", "rescan", "post-deployment",
+                            detail=f"{kind}: {len(new)} new, {len(resolved)} resolved")
+
+
+def simulate_drift() -> None:
+    S.live_files = monitor.simulate_drift(S.live_files)
+    remediation.audit_event(S.audit, "system", "drift_simulated", "post-deployment",
+                            detail="SIMULATION: test vulnerabilities injected into the in-memory copy")
+    rescan("rescan after simulated drift")
+
+
+def apply_fixes(prefix: str) -> None:
+    sc = SCOPES[prefix]
+    if prefix == "p2":
+        base, plan = S.project.text_files, S.plan
+    else:
+        base, plan = S.live_files, S.plan5
+    result = remediation.apply_and_audit(base, plan, S[sc["decisions"]], S.audit, S[sc["logged"]], sc["label"])
+    S[sc["apply"]] = result
+    if prefix == "p2":
+        S.corrected = result.files
+        S.zip_bytes = export.build_zip(result.files, S.project.binary_files)
+        S.residual = None
+        S.deployment, S.live_files, S.baseline, S.history = None, None, None, []
+        S.rescan_new, S.plan5, S.decisions5, S.apply5 = [], [], {}, None
+        S.last_scan, S.last_rescan = None, None
+    else:
+        S.live_files = result.files
+        rescan("post-remediation rescan")
+
+
+def deploy_now() -> None:
+    residual = residual_scan()
+    try:
+        record = deploy.simulate_deployment(
+            S.project.name, S.corrected, S.project.binary_files, residual.findings,
+            pending_count(), bool(S.get("deploy_ack", False)),
+        )
+    except ValueError as exc:
+        S.deploy_err = str(exc)
+        return
+    S.deploy_err = ""
+    S.deployment = record
+    S.live_files = dict(S.corrected)
+    S.baseline = {monitor.fingerprint(f) for f in residual.findings}
+    S.history = []
+    monitor.record_scan(S.history, "deployment baseline", residual, None)
+    S.rescan_new, S.plan5, S.decisions5, S.apply5 = [], [], {}, None
+    S.last_scan, S.last_rescan = residual, None
+    remediation.audit_event(S.audit, "system", "deployment_simulated", "deployment",
+                            detail=f"SIMULATION only; package sha256 {record.digest[:16]}")
