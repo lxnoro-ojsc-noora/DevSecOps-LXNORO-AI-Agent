@@ -65,10 +65,13 @@ prompts:
         stop. Do not invent policy from memory.
 
         Step 3. Get the real findings. The repository CI job named self-scan runs the app's own
-        scanner and uploads an artifact called scan-report.json. Use gitlab_api_get to list the
-        merge request pipelines (GET /projects/<project_id>/merge_requests/<iid>/pipelines), then the
-        jobs of the newest pipeline (GET /projects/<project_id>/pipelines/<pipeline_id>/jobs), then read
-        the artifact of the self-scan job (GET /projects/<project_id>/jobs/<job_id>/artifacts/scan-report.json).
+        scanner and uploads an artifact called scan-report.json. Use gitlab_api_get. Its endpoint
+        argument must be a path that starts with /api/v4/ and must not contain a query string; pass
+        any query values in its params argument. List the merge request pipelines with
+        /api/v4/projects/<project_id>/merge_requests/<iid>/pipelines, then the jobs of the newest
+        pipeline with /api/v4/projects/<project_id>/pipelines/<pipeline_id>/jobs, then read the
+        artifact of the self-scan job with
+        /api/v4/projects/<project_id>/jobs/<job_id>/artifacts/scan-report.json.
         Use only findings that appear in that file. If the artifact cannot be fetched, say so in your
         comment. You may then use grep and read_file to look for the rule patterns named in the skill,
         but you must label every such result as an agent observation and not scanner output.
