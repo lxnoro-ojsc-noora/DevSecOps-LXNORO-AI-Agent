@@ -5,6 +5,8 @@ import difflib
 import io
 import zipfile
 
+from .scanners import redact
+
 FIXED_DATE = (2026, 1, 1, 0, 0, 0)
 
 
@@ -31,5 +33,5 @@ def diff_summary(original: dict[str, str], corrected: dict[str, str]) -> list[tu
     for path in sorted(changed_files(original, corrected)):
         old = original.get(path, "").split("\n")
         new = corrected[path].split("\n")
-        out.append((path, "\n".join(difflib.unified_diff(old, new, f"a/{path}", f"b/{path}", lineterm="", n=2))))
+        out.append((path, redact("\n".join(difflib.unified_diff(old, new, f"a/{path}", f"b/{path}", lineterm="", n=2)))))
     return out

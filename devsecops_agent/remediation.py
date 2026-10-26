@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 from .models import Finding, utc_now
+from .scanners import redact
 
 AUTO_RISK = "low"
 APPROVAL_SEVERITIES = ("high", "critical")
@@ -166,9 +167,9 @@ def plan_remediations(files: dict[str, str], findings: list[Finding]) -> list[Re
         new_lines[idx] = new_line
         if spec.import_module:
             new_lines = _ensure_import(new_lines, spec.import_module)
-        diff = "\n".join(
+        diff = redact("\n".join(
             difflib.unified_diff(lines, new_lines, f"a/{f.path}", f"b/{f.path}", lineterm="", n=1)
-        )
+        ))
         plan.append(Remediation(
             finding_id=f.id, rule_id=f.rule_id, path=f.path, line=f.line,
             severity=f.severity, fix_risk=spec.risk, description=spec.description,
@@ -176,6 +177,15 @@ def plan_remediations(files: dict[str, str], findings: list[Finding]) -> list[Re
             needs_approval=needs_approval(f.severity, spec.risk),
         ))
     return plan
+
+
+def _compiles(source: str) -> bool:
+    """Static syntax check via compile(); the code is never executed."""
+    try:
+        compile(source, "<candidate>", "exec", dont_inherit=True)
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        return False
+    return True
 
 
 def apply_remediations(files: dict[str, str], plan: list[Remediation], decisions: dict) -> ApplyResult:
@@ -216,6 +226,13 @@ def apply_remediations(files: dict[str, str], plan: list[Remediation], decisions
         for module in sorted(modules):
             lines = _ensure_import(lines, module)
         out[path] = "\n".join(lines)
+    touched = {r.path for r in plan if statuses.get(r.finding_id) == "applied" and r.path.endswith(".py")}
+    for path in touched:
+        if _compiles(files[path]) and not _compiles(out[path]):
+            out[path] = files[path]
+            for r in plan:
+                if r.path == path and statuses.get(r.finding_id) == "applied":
+                    statuses[r.finding_id] = "skipped"
     return ApplyResult(files=out, statuses=statuses)
 
 
