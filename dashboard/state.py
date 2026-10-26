@@ -45,7 +45,7 @@ def _defaults() -> dict:
         "deployment": None, "deploy_err": "", "live_files": None, "baseline": None, "history": [],
         "rescan_new": [], "last_scan": None, "last_rescan": None, "plan5": [], "decisions5": {},
         "logged5": set(), "apply5": None, "gh_access": None, "gh_result": None, "audit": [],
-        "gitlab_session": None, "gitlab_output": [], "gitlab_msg": "", "gitlab_ok": "",
+        "gitlab_session": None, "gitlab_output": [], "gitlab_msg": "", "gitlab_ok": "", "sim_paths": set(),
     }
 
 
@@ -236,9 +236,24 @@ def rescan(kind: str) -> None:
 
 def simulate_drift() -> None:
     S.live_files = monitor.simulate_drift(S.live_files)
+    S.sim_paths = set(S.sim_paths) | {monitor.DRIFT_PATH}
     remediation.audit_event(S.audit, "system", "drift_simulated", "post-deployment",
                             detail="SIMULATION: test vulnerabilities injected into the in-memory copy")
     rescan("rescan after simulated drift")
+
+
+def sync_corrected() -> int:
+    """Make the canonical corrected project (download and publish source) match the live copy.
+
+    Simulated drift files are excluded: they are demo artefacts and must never be exported.
+    Returns how many real files changed.
+    """
+    new = {p: c for p, c in S.live_files.items() if p not in S.sim_paths}
+    changed = sum(1 for p, c in new.items() if S.corrected.get(p) != c)
+    S.corrected = new
+    S.zip_bytes = export.build_zip(new, S.project.binary_files)
+    S.residual = None
+    return changed
 
 
 def apply_fixes(prefix: str) -> None:
@@ -256,8 +271,19 @@ def apply_fixes(prefix: str) -> None:
         S.deployment, S.live_files, S.baseline, S.history = None, None, None, []
         S.rescan_new, S.plan5, S.decisions5, S.apply5 = [], [], {}, None
         S.last_scan, S.last_rescan = None, None
+        S.sim_paths = set()
     else:
         S.live_files = result.files
+        exported = sync_corrected()
+        for r in plan:
+            if r.path in S.sim_paths and result.statuses.get(r.finding_id) == "applied":
+                result.statuses[r.finding_id] = "applied_simulated"
+                remediation.audit_event(S.audit, "system", "simulated_fix_not_exported", "post-deployment",
+                                        finding_id=r.finding_id, path=r.path,
+                                        detail="Applied to a simulated drift file only; not part of the exported project")
+        if exported:
+            remediation.audit_event(S.audit, "system", "export_updated", "post-deployment",
+                                    detail=f"Corrected project updated: {exported} file(s) changed after deployment")
         rescan("post-remediation rescan")
 
 
@@ -274,6 +300,7 @@ def deploy_now() -> None:
     S.deploy_err = ""
     S.deployment = record
     S.live_files = dict(S.corrected)
+    S.sim_paths = set()
     S.baseline = {monitor.fingerprint(f) for f in residual.findings}
     S.history = []
     monitor.record_scan(S.history, "deployment baseline", residual, None)

@@ -33,6 +33,9 @@ def render_queue(prefix: str, plan: list) -> None:
     if not plan:
         C.empty_state("shield-check", "No deterministic fixes available",
                       "Remaining findings need manual remediation. See the prioritized plan in the report.")
+        if prefix == "p2":
+            st.button("Accept project as is and continue", key="p2_apply", on_click=apply_fixes, args=("p2",),
+                      icon=":material/arrow_forward:", type="primary")
         return
     if any(r.needs_approval for r in plan):
         with st.container(border=True):

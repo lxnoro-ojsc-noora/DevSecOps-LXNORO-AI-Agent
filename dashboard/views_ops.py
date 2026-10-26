@@ -6,6 +6,7 @@ import os
 import streamlit as st
 
 from devsecops_agent import deploy, export
+from devsecops_agent.scanners import redact
 
 from . import components as C
 from .state import S, deploy_now, goto, pending_count, rescan, residual_scan, simulate_drift
@@ -61,7 +62,7 @@ def view_deploy() -> None:
         paths = sorted(export.changed_files(S.project.text_files, S.corrected)) or sorted(S.corrected)[:50]
         if paths:
             choice = st.selectbox("Corrected file", paths, key="view_file", label_visibility="collapsed")
-            body = "\n".join(S.corrected[choice].split("\n")[:400])
+            body = redact("\n".join(S.corrected[choice].split("\n")[:400]))
             st.code(body, language=LANGS.get(os.path.splitext(choice)[1].lower()))
     if rec:
         st.button("Continue to rescan", on_click=goto, args=(7,), key="cta_6", icon=":material/arrow_forward:", type="primary")
