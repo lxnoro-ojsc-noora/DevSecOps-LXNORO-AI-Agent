@@ -8,6 +8,7 @@ records an approval. Original files are never mutated; fixes produce copies.
 from __future__ import annotations
 
 import difflib
+import hashlib
 import re
 from dataclasses import dataclass
 from typing import Callable, Optional
@@ -93,10 +94,8 @@ FIXERS: dict[str, FixSpec] = {
 
 def _import_position(lines: list[str]) -> int:
     i = 0
-    if i < len(lines) and lines[i].startswith("#!"):
-        i += 1
-    if i < len(lines) and lines[i].startswith("#") and "coding" in lines[i]:
-        i += 1
+    while i < len(lines) and (lines[i].startswith("#") or not lines[i].strip()):
+        i += 1  # shebang, coding line, licence header and blank lines stay first
     if i < len(lines):
         s = lines[i].lstrip()
         for q in ('"""', "'''"):
@@ -131,7 +130,7 @@ class Remediation:
     severity: str
     fix_risk: str
     description: str
-    old_line: str
+    old_line_digest: str  # sha256 of the original line; the raw line is never stored or shown
     diff: str
     needs_approval: bool
 
@@ -173,10 +172,14 @@ def plan_remediations(files: dict[str, str], findings: list[Finding]) -> list[Re
         plan.append(Remediation(
             finding_id=f.id, rule_id=f.rule_id, path=f.path, line=f.line,
             severity=f.severity, fix_risk=spec.risk, description=spec.description,
-            old_line=lines[idx].strip(), diff=diff,
+            old_line_digest=_digest(lines[idx]), diff=diff,
             needs_approval=needs_approval(f.severity, spec.risk),
         ))
     return plan
+
+
+def _digest(line: str) -> str:
+    return hashlib.sha256(line.strip().encode("utf-8")).hexdigest()
 
 
 def _compiles(source: str) -> bool:
@@ -209,7 +212,7 @@ def apply_remediations(files: dict[str, str], plan: list[Remediation], decisions
             continue
         lines = content.split("\n")
         idx = r.line - 1
-        if not 0 <= idx < len(lines) or lines[idx].strip() != r.old_line:
+        if not 0 <= idx < len(lines) or _digest(lines[idx]) != r.old_line_digest:
             statuses[r.finding_id] = "skipped"
             continue
         new_line = spec.fn(lines[idx])

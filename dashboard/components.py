@@ -23,7 +23,8 @@ STATUS_TONES = {
     "applied": ("ok", "Applied"), "approved": ("info", "Approved, not yet applied"),
     "rejected": ("bad", "Rejected"), "pending_approval": ("warn", "Awaiting approval"),
     "awaiting_approval": ("warn", "Awaiting approval"), "ready": ("ok", "Ready to apply"),
-    "skipped": ("muted", "Skipped (file changed)"),
+    "skipped": ("muted", "Skipped (file changed or rewrite invalid)"),
+    "applied_simulated": ("muted", "Applied to a simulated file only (not exported)"),
 }
 
 AUDIT_TONES = {
