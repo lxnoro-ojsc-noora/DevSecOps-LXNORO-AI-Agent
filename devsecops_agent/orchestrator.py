@@ -76,7 +76,7 @@ def _prompt(instruction: str, schema: str, payload: dict) -> str:
 
 
 def _clip(value, limit: int) -> str:
-    return value.strip()[:limit] if isinstance(value, str) else ""
+    return redact(value.strip()[:limit]) if isinstance(value, str) else ""
 
 
 def _json_object(text: str) -> dict:

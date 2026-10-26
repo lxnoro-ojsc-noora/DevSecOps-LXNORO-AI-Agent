@@ -193,6 +193,8 @@ def finding_card(f, ai_note: str = "", ai_label: str = "") -> str:
 
 def queue_header(r, status: str) -> str:
     gate = badge("Human approval required", "warn", "lock") if r.needs_approval else badge("Auto-eligible, low risk", "ok", "check-circle")
+    if r.rule_id == "AI-CANDIDATE":
+        gate = badge("AI-proposed", "info", "sparkles") + gate
     return (
         f'<div class="lx-q">{sev_badge(r.severity)}{gate}{status_badge(status)}'
         f'<span class="loc">{esc(r.path)}:{esc(r.line)}</span></div>'

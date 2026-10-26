@@ -106,11 +106,40 @@ def goto(n: int) -> None:
 
 # ---------------------------------------------------------------- derived data
 
+def _origin(result) -> str:
+    return "live" if result.live else "simulated"
+
+
+def ai_section() -> dict:
+    """Labelled, advisory AI results for the report. Empty when no AI step was run."""
+    out = {}
+    if S.ai_triage:
+        t = S.ai_triage
+        out["triage"] = {"origin": _origin(t), "provider": t.label, "summary": t.summary,
+                         "discarded_invalid_entries": t.discarded,
+                         "priorities": [{"finding_id": p.finding_id, "rank": p.rank, "rationale": p.rationale}
+                                        for p in t.priorities]}
+    if S.ai_fixes:
+        f = S.ai_fixes
+        out["candidate_fixes"] = {"origin": _origin(f), "provider": f.label, "accepted_for_approval": len(f.candidates),
+                                  "rejected": [{"finding_id": i, "reason": why} for i, why in f.rejected]}
+    if S.ai_validation:
+        out["validation_summary"] = {"origin": _origin(S.ai_validation), "provider": S.ai_validation.label,
+                                     "text": S.ai_validation.text}
+    if S.ai_rescan:
+        out["rescan_interpretation"] = {"origin": _origin(S.ai_rescan), "provider": S.ai_rescan.label,
+                                        "text": S.ai_rescan.text}
+    return out
+
+
 def current_report() -> dict:
     statuses = S.apply_result.statuses if S.apply_result else {}
     notes = S.ai.notes if S.ai else {}
     label = S.ai.label if S.ai else ""
-    return report_mod.build_report(S.project.name, S.scan, notes, label, statuses)
+    rep = report_mod.build_report(S.project.name, S.scan, notes, label, statuses)
+    rep["mode"] = S.mode
+    rep["ai_analysis"] = ai_section()
+    return rep
 
 
 def residual_scan():

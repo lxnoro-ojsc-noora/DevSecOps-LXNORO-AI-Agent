@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 import requests
 
 from ..models import sort_findings
+from ..scanners import redact
 from .base import SYSTEM_PROMPT, AIResult, ProviderStatus, https_only
 
 PROVIDERS = ("anthropic", "gemini", "openai")
@@ -122,7 +123,7 @@ def explain_findings(cfg: AIConfig, findings, post=None, progress=None, limit: i
         result.attempted += 1
         try:
             url, headers, payload = _request(cfg, _prompt(f))
-            text = _extract(cfg, post(url, headers, payload, 30)).strip()[:1200]
+            text = redact(_extract(cfg, post(url, headers, payload, 30)).strip()[:1200])
             if text:
                 result.notes[f.id] = text
             else:
