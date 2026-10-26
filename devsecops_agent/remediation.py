@@ -17,6 +17,7 @@ from .models import Finding, utc_now
 from .scanners import redact
 
 AUTO_RISK = "low"
+AI_CANDIDATE = "AI-CANDIDATE"  # model-proposed change; ALWAYS needs a named human approval
 APPROVAL_SEVERITIES = ("high", "critical")
 
 
@@ -133,6 +134,7 @@ class Remediation:
     old_line_digest: str  # sha256 of the original line; the raw line is never stored or shown
     diff: str
     needs_approval: bool
+    new_line: str = ""  # replacement line, only for AI candidates (validated secret-free)
 
 
 @dataclass(frozen=True)
@@ -198,7 +200,7 @@ def apply_remediations(files: dict[str, str], plan: list[Remediation], decisions
     imports: dict[str, set] = {}
     for r in plan:
         d = decisions.get(r.finding_id)
-        if r.needs_approval:
+        if r.needs_approval or r.rule_id == AI_CANDIDATE:
             if d is not None and d.decision == "rejected":
                 statuses[r.finding_id] = "rejected"
                 continue
@@ -207,7 +209,7 @@ def apply_remediations(files: dict[str, str], plan: list[Remediation], decisions
                 continue
         spec = FIXERS.get(r.rule_id)
         content = out.get(r.path)
-        if spec is None or content is None:
+        if (spec is None and r.rule_id != AI_CANDIDATE) or content is None:
             statuses[r.finding_id] = "skipped"
             continue
         lines = content.split("\n")
@@ -215,13 +217,16 @@ def apply_remediations(files: dict[str, str], plan: list[Remediation], decisions
         if not 0 <= idx < len(lines) or _digest(lines[idx]) != r.old_line_digest:
             statuses[r.finding_id] = "skipped"
             continue
-        new_line = spec.fn(lines[idx])
+        if r.rule_id == AI_CANDIDATE:
+            new_line = r.new_line + ("\r" if lines[idx].endswith("\r") else "")
+        else:
+            new_line = spec.fn(lines[idx])
         if new_line is None:
             statuses[r.finding_id] = "skipped"
             continue
         lines[idx] = new_line
         out[r.path] = "\n".join(lines)
-        if spec.import_module:
+        if spec and spec.import_module:
             imports.setdefault(r.path, set()).add(spec.import_module)
         statuses[r.finding_id] = "applied"
     for path, modules in imports.items():
