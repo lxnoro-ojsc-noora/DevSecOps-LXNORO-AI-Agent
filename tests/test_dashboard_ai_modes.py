@@ -115,10 +115,10 @@ def test_simulation_workflow_is_labelled_and_ai_candidates_stay_gated():
     names = {c.name: c.status for c in scan.checks}
     assert names["Bandit (Python SAST)"] == "performed" and "Dependency advisories (SIMULATED fixture)" in names
 
-    at.button(key="ai_triage").click().run()
+    at.button(key="btn_ai_triage").click().run()
     triage = at.session_state["ai_triage"]
     assert triage.live is False and "SIMULATED" in triage.label and "SIMULATED" in text_of(at)
-    at.button(key="ai_fixes").click().run()
+    at.button(key="btn_ai_fixes").click().run()
     cand = at.session_state["ai_fixes"].candidates[0]
     assert any(r.rule_id == "AI-CANDIDATE" for r in at.session_state["plan"])
 
@@ -130,7 +130,7 @@ def test_simulation_workflow_is_labelled_and_ai_candidates_stay_gated():
     assert at.session_state["apply_result"].statuses[cand.finding_id] == "applied"
     corrected = at.session_state["corrected"]["app.py"]
     assert "shell=False" in corrected and "ast.literal_eval" not in corrected  # high-risk eval fix not approved
-    at.button(key="ai_validation").click().run()
+    at.button(key="btn_ai_validation").click().run()
     assert at.session_state["ai_validation"].text.startswith("SIMULATED")
 
     at.session_state["stage"] = 5
@@ -145,8 +145,8 @@ def test_simulation_workflow_is_labelled_and_ai_candidates_stay_gated():
 def test_live_mode_without_credentials_reports_unavailable_and_never_fakes():
     at = seeded(SHELL_APP)
     at.button(key="btn_scan").click().run()
-    assert at.button(key="ai_triage").proto.disabled and at.button(key="ai_fixes").proto.disabled
-    at.button(key="ai_test").click().run()
+    assert at.button(key="btn_ai_triage").proto.disabled and at.button(key="btn_ai_fixes").proto.disabled
+    at.button(key="btn_ai_test").click().run()
     assert at.session_state["ai_health"]["state"] == "unavailable"
     assert "Live AI is unavailable" in text_of(at)
     assert at.session_state["ai_triage"] is None and at.session_state["ai_fixes"] is None
@@ -157,9 +157,9 @@ def test_live_failure_is_reported_and_never_replaced_by_a_mock_answer(live_ai, m
     monkeypatch.setattr(FakeLive, "fail", True)
     at = seeded(SHELL_APP)
     at.button(key="btn_scan").click().run()
-    at.button(key="ai_triage").click().run()
+    at.button(key="btn_ai_triage").click().run()
     assert at.session_state["ai_triage"] is None and "timeout" in at.session_state["ai_msg"]
-    at.button(key="ai_fixes").click().run()
+    at.button(key="btn_ai_fixes").click().run()
     assert at.session_state["ai_fixes"] is None and "timeout" in text_of(at)
     assert "LIVE-FAKE" not in text_of(at) and "SIMULATED AI" not in text_of(at)
 
@@ -168,10 +168,10 @@ def test_connection_test_reports_verified_and_failed_states(live_ai, monkeypatch
     at = seeded(SHELL_APP)
     assert at.session_state["ai_health"] is None  # nothing is claimed before a real test
     monkeypatch.setattr(llm, "ping", lambda cfg, post=None: llm.HealthResult(True, "ok", "fake answered.", 12))
-    at.button(key="ai_test").click().run()
+    at.button(key="btn_ai_test").click().run()
     assert at.session_state["ai_health"]["state"] == "verified"
     monkeypatch.setattr(llm, "ping", lambda cfg, post=None: llm.HealthResult(False, "auth", "credentials rejected"))
-    at.button(key="ai_test").click().run()
+    at.button(key="btn_ai_test").click().run()
     health = at.session_state["ai_health"]
     assert health["state"] == "failed" and "auth" in health["detail"]
     assert "SECRETKEY" not in text_of(at)
@@ -186,10 +186,10 @@ def test_live_orchestration_candidate_fix_needs_approval_and_reaches_the_export(
     assert names["Bandit (Python SAST)"] == "performed" and names["Dependency advisories (OSV.dev)"] == "skipped"
     assert not any(n.startswith(("Dependency vulnerability", "External SAST")) for n in names)
 
-    at.button(key="ai_triage").click().run()
+    at.button(key="btn_ai_triage").click().run()
     triage = at.session_state["ai_triage"]
     assert triage.live and triage.priorities and "LIVE AI" in text_of(at)
-    at.button(key="ai_fixes").click().run()
+    at.button(key="btn_ai_fixes").click().run()
     fixes = at.session_state["ai_fixes"]
     assert len(fixes.candidates) == 1 and fixes.rejected  # the unchanged import suggestion was rejected
     cand = fixes.candidates[0]
@@ -223,8 +223,8 @@ def test_live_rescan_interpretation_is_reachable_after_drift(live_ai):
     at.button(key="btn_deploy").click().run()
     at.session_state["stage"] = 7
     at.run()
-    assert at.button(key="ai_rescan").proto.disabled  # nothing to interpret before a rescan
+    assert at.button(key="btn_ai_rescan").proto.disabled  # nothing to interpret before a rescan
     at.button(key="btn_drift").click().run()
-    at.button(key="ai_rescan").click().run()
+    at.button(key="btn_ai_rescan").click().run()
     result = at.session_state["ai_rescan"]
     assert result.live and result.text == "LIVE-FAKE rescan" and "LIVE AI" in text_of(at)
