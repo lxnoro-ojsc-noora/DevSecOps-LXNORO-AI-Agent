@@ -23,3 +23,17 @@ unit-tests:
     when: always
     reports:
       junit: report.xml
+
+# Runs this tool's own deterministic scanner over this repository (static, nothing executed).
+# Informational: it scans THIS repository only, not any project a user uploads to the app.
+# Also runs in scheduled pipelines if a schedule is created in the GitLab UI.
+self-scan:
+  stage: test
+  image: python:3.12-slim
+  script:
+    - python -m devsecops_agent.cli . --exclude tests --exclude devsecops_agent/scanners.py --out scan-report.json
+  artifacts:
+    when: always
+    paths:
+      - scan-report.json
+  allow_failure: true
