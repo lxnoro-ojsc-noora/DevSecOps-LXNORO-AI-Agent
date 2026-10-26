@@ -1,6 +1,6 @@
 # DevSecOps LXNORO AI Agent
 
-Streamlit security command center (GitLab Transcend hackathon). It statically analyzes a source ZIP or a public GitHub repository, reports evidence-based findings, applies **only low-risk fixes automatically**, and **requires a named human approval for every high or critical change**. Uploaded code is never executed.
+A Streamlit security command center (GitLab Transcend hackathon). It scans a source ZIP or a public GitHub repository with real engines, lets an optional AI orchestrator prioritise findings and propose fixes, applies **only low-risk fixes automatically**, and **requires a named human approval for every high-risk or AI-proposed change**. Uploaded code is never executed.
 
 MIT License. Copyright (c) 2026 NOORA AL-MAOLAI, Research Center: LXNORO OJSC.
 
@@ -8,44 +8,60 @@ MIT License. Copyright (c) 2026 NOORA AL-MAOLAI, Research Center: LXNORO OJSC.
 
 ```
 pip install -r requirements.txt
-streamlit run app.py      # http://localhost:8501
-python -m pytest -q
+streamlit run app.py          # http://localhost:8501
+python -m pytest -q           # mocked and unit tests (live tests are excluded)
 ```
 
-No secrets are needed for the core workflow. AI and GitHub publishing stay disabled until configured.
+## Live and Simulation mode (selector at the top of the page)
 
-## Seven stages (locked until prerequisites exist)
+| | LIVE | SIMULATION |
+|---|---|---|
+| Scanners | built-in rules, **Bandit**, **OSV.dev** (network) | built-in rules, Bandit, labelled offline advisory fixture |
+| AI | your configured provider only; no key means "unavailable" | deterministic templates, labelled SIMULATED, not a model |
+| Intake | ZIP upload, public GitHub import | the above plus a built-in demo project |
+| GitHub publishing / GitLab AI | available when configured | disabled: no external changes |
+| Deployment | **simulation only** (no deployment provider exists) | simulation |
 
-1. **Intake**: ZIP upload or public GitHub import (archive download, never a clone). In-memory validation against path traversal, symlinks, encrypted entries, size, entry-count and ZIP-bomb limits.
-2. **Analysis**: deterministic static rules with redacted evidence; performed, skipped and unavailable checks are listed. Optional AI provider.
-3. **Report**: risk level, strengths, weaknesses, prioritized plan, limitations; JSON, Markdown and a manual GitLab Duo hand-off brief.
-4. **Remediation**: diffs per fix. Automatic only when severity is below high AND the fixer is low risk; everything else needs a named approver (enforced in `devsecops_agent/remediation.py`). Audit timeline.
-5. **Export**: corrected ZIP (real). GitHub publishing: new branch and pull request only, gated.
-6. **Deploy**: **simulation only**. Gate, package digest and scan are computed; build, release and health check are simulated and labelled. No URL.
-7. **Rescan**: on-demand comparison with the deployment baseline (new, resolved, remaining). The drift button is a labelled simulation. Not continuous monitoring.
+Both modes share the same approval, validation and audit rules. Live mode never falls back to simulation after an error; switching mode resets the workflow.
 
-## AI providers (optional, advisory)
+## The seven stages
 
-Findings never depend on AI. If a provider is missing or fails, the workflow continues and the failure is shown. AI text is labelled advisory.
+1. **Intake**: hardened in-memory ZIP handling; public GitHub archive import.
+2. **Analysis**: built-in rules, Bandit (run as a subprocess, no shell, private temp dir, timeout; it parses code, never runs it), OSV.dev for pinned PyPI requirements. Missing tools or failed requests show as *unavailable*.
+3. **Report**: risk level, strengths, weaknesses, plan; JSON/Markdown with a separately labelled AI section; manual GitLab Duo hand-off brief.
+4. **Remediation**: diffs, approval queue, audit trail. Auto-apply only when severity is below high and the fixer is low risk. AI candidates always need approval (enforced in `remediation.apply_remediations`).
+5. **Export**: corrected ZIP; GitHub publishing (new branch and pull request only) when configured. Stage-7 fixes update this canonical project; simulated drift files are never exported.
+6. **Deploy**: simulation only; gate, package digest and scan are computed, the rest is simulated.
+7. **Rescan**: on-demand comparison with the deployment baseline (new, resolved, remaining) and an optional AI interpretation. Not continuous monitoring.
 
-- **External API** (`devsecops_agent/ai/external.py`): `AI_PROVIDER` (`anthropic`, `gemini` or `openai` for any OpenAI-compatible server), `AI_API_KEY`, `AI_MODEL`, and for `openai` an optional https `AI_ENDPOINT`. Only rule titles, locations and redacted evidence are sent. Settings come from secrets or environment variables, never from the UI.
-- **GitLab Duo Agent Platform** (`devsecops_agent/ai/gitlab_duo.py`): uses the documented, experimental Flows API (`POST /api/v4/ai/duo_workflows/workflows`) to submit a read-only, asynchronous triage session to a GitLab project. It runs in GitLab CI, uses Duo quota, and its output appears in GitLab. Not a synchronous API. Settings: `GITLAB_AI_TOKEN`, `GITLAB_AI_PROJECT_ID` (numeric), optional `GITLAB_URL` (https) and `GITLAB_AI_WORKFLOW_DEFINITION`.
-- The GitLab Duo Chat completions REST API is documented as internal-only on GitLab.com, so it is not used and the UI shows it as unsupported.
+## AI orchestration
 
-## GitHub publishing (optional)
+`devsecops_agent/orchestrator.py` asks the model for triage, candidate fixes and summaries, and treats every answer as untrusted: strict JSON parsing, ids checked against real findings, secrets redacted, and each candidate fix must be one line, free of secret-like text, compile (never executed), no longer be flagged by the deterministic scanner, and pass named human approval. Secret-bearing lines are never sent to the model.
 
-Disabled unless `GITHUB_TOKEN` (fine-grained, one repository), `PUBLISH_REPO` (`owner/repository`) and `PUBLISH_KEY` are all set. The target repo is fixed, the default branch is refused, history is never rewritten, and the user must verify access, enter the key and confirm.
+**Primary provider: external API** (`devsecops_agent/ai/`), configured with Streamlit secrets or environment variables, never in the UI:
 
-## Verification status
+- `AI_PROVIDER`: `anthropic`, `gemini`, or `openai` (any OpenAI-compatible server)
+- `AI_API_KEY`, `AI_MODEL`, and for `openai` an optional https `AI_ENDPOINT`
 
-- **Verified in CI:** scanner, approval gate, export, and a headless run of the seven-stage UI flow (Streamlit `AppTest`). GitHub and AI code paths are verified only against fake transports.
-- **Not verified:** live calls to GitHub, the GitLab Flows API or an external AI provider; the look of the UI in a real browser; Streamlit Community Cloud deployment.
-- **Not implemented:** real deployment, continuous monitoring, CVE lookups, Semgrep/Bandit inside the app.
+**Optional: GitLab Duo Agent Platform** uses the documented, experimental Flows API to submit a read-only, asynchronous triage session (live mode only): `GITLAB_AI_TOKEN`, `GITLAB_AI_PROJECT_ID`, optional `GITLAB_URL`, `GITLAB_AI_WORKFLOW_DEFINITION`. The Duo Chat completions API is internal-only on GitLab.com and is not used.
 
-## GitLab Duo in this repository
+**GitHub publishing** needs `GITHUB_TOKEN` (fine-grained, one repository), `PUBLISH_REPO` (`owner/repo`) and `PUBLISH_KEY`; it refuses the default branch and never force-pushes.
 
-`.gitlab/duo/mr-review-instructions.yaml` (Duo Code Review instructions) and `AGENTS.md` (project instructions for Duo Chat and flows). CI: `.gitlab-ci.yml` runs pytest, SAST, Secret Detection and an informational `self-scan`.
+## Verified versus unverified
 
-## Streamlit Community Cloud
+| Capability | Evidence |
+|---|---|
+| Scanner, remediation gates, export, secret redaction, approvals, audit, stage-7 export consistency | unit and headless UI tests in CI |
+| Whole seven-stage UI flow, both modes, AI orchestration wiring | headless `AppTest` with a stand-in provider (wiring only) |
+| Bandit | really executed in CI tests |
+| OSV.dev | mocked in unit tests; **real query only in the `live-integration` CI job**, skipped with a reason if the network is unreachable |
+| External AI provider | mocked in unit tests; **real call only if** the AI variables are set in CI; **otherwise unverified** |
+| GitLab Flows API, GitHub publishing | fake transports only: **unverified** |
+| Real deployment, continuous monitoring, Semgrep in the app | not implemented |
+| Browser look and feel, Streamlit Community Cloud | not verified |
 
-Connect the GitHub repository, set the main file to `app.py`, and add secrets only for the optional features.
+To verify live AI in CI, add masked CI/CD variables `AI_PROVIDER`, `AI_API_KEY`, `AI_MODEL`, then read the `live-integration` job log.
+
+## Repository
+
+`.gitlab-ci.yml` runs pytest, SAST, Secret Detection, `self-scan` and `live-integration`. `.gitlab/duo/mr-review-instructions.yaml` and `AGENTS.md` configure GitLab Duo for this repository.
