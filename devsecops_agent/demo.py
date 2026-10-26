@@ -29,7 +29,7 @@ def demo_project() -> Project:
         f"    return {_EVAL}expr)",
         "",
         "",
-        f'PASSWORD = "{_FAKE_SECRET}"',
+        'PASSWORD = "%s"' % _FAKE_SECRET,
         "",
         'if __name__ == "__main__":',
         f"    app.run({_DEBUG})",
