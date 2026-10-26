@@ -12,8 +12,9 @@ from devsecops_agent.models import SEVERITY_ORDER, count_by_severity
 
 from . import components as C
 from .icons import svg
+from .ai_panel import ai_markdown, render_ai_panel, render_ai_report_section
 from .state import (
-    S, cfg_get, current_report, goto, gitlab_refresh, gitlab_submit, gitlab_test, load_project,
+    S, cfg_get, current_report, goto, gitlab_refresh, gitlab_submit, gitlab_test, load_demo, load_project,
     run_analysis, safe_name,
 )
 
@@ -21,6 +22,12 @@ from .state import (
 def view_intake() -> None:
     C.hero("Project Intake", "Bring in the code you want to secure. Everything is validated in memory and nothing is ever executed.",
            "upload", "STAGE 01")
+    if S.mode == "simulation":
+        with st.container(border=True):
+            C.section("Simulated demo project",
+                      "Built-in, deliberately insecure sample. Deterministic and repeatable; it is only read, never executed.", "flask")
+            st.button("Load SIMULATED demo project", on_click=load_demo, key="btn_demo", icon=":material/science:",
+                      type="primary")
     left, right = st.columns(2, gap="large")
     with left:
         with st.container(border=True):
@@ -122,8 +129,11 @@ def view_analysis() -> None:
                                       format_func=lambda i: by_id[i].label, default="none",
                                       key="ai_provider", label_visibility="collapsed") or "none"
         C.md(_provider_grid(statuses, choice))
-        effective = choice
-        if by_id[choice].state != "ready":
+        effective = choice if S.mode == "live" else "none"
+        if S.mode == "simulation":
+            st.info("Simulation mode: per-finding AI explanations and GitLab Duo are disabled. Use the simulated "
+                    "orchestration below.")
+        elif by_id[choice].state != "ready":
             st.warning(f"{by_id[choice].label} is not ready, so the analysis will use deterministic checks only.")
             effective = "none"
     with st.container(border=True):
@@ -148,7 +158,7 @@ def view_analysis() -> None:
             C.section("Severity and scan modules", "Completed, skipped and unavailable checks are listed honestly.", "layers")
             C.md(C.sev_bar(summary["counts"]))
             C.md(C.check_grid(scan.checks))
-    if choice == "gitlab" and by_id["gitlab"].state == "ready":
+    if S.mode == "live" and choice == "gitlab" and by_id["gitlab"].state == "ready":
         _gitlab_card()
     with st.container(border=True):
         C.section("Findings", "Every finding is traceable to a rule, file and line. Evidence is redacted.", "bug")
@@ -167,6 +177,7 @@ def view_analysis() -> None:
             C.md("".join(C.finding_card(f, notes.get(f.id, ""), label) for f in shown[:100]))
             if len(shown) > 100:
                 st.caption(f"Showing the first 100 of {len(shown)} findings; the report contains all of them.")
+    render_ai_panel()
     st.button("Continue to the report", on_click=goto, args=(3,), key="cta_2", icon=":material/arrow_forward:", type="primary")
 
 
@@ -199,6 +210,7 @@ def view_report() -> None:
             st.dataframe(rep["remediation_plan"], hide_index=True)
         else:
             C.empty_state("shield-check", "Nothing to remediate", "The checks performed produced no findings.")
+    render_ai_report_section()
     with st.container(border=True):
         C.section("Limitations", "What this report does not claim.", "info")
         C.checklist([("warn", x) for x in rep["limitations"]])
@@ -208,7 +220,7 @@ def view_report() -> None:
         d1, d2, d3 = st.columns(3)
         d1.download_button("Report (JSON)", json.dumps(rep, indent=2), file_name=f"{name}-report.json",
                            mime="application/json", key="dl_json", icon=":material/data_object:")
-        d2.download_button("Report (Markdown)", report_mod.report_markdown(rep), file_name=f"{name}-report.md",
+        d2.download_button("Report (Markdown)", report_mod.report_markdown(rep) + ai_markdown(rep), file_name=f"{name}-report.md",
                            mime="text/markdown", key="dl_md", icon=":material/description:")
         d3.download_button("GitLab Duo hand-off brief", report_mod.duo_handoff(rep), file_name=f"{name}-duo-handoff.md",
                            mime="text/markdown", key="dl_duo", icon=":material/assignment:")

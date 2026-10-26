@@ -10,6 +10,7 @@ from devsecops_agent.scanners import redact
 
 from . import components as C
 from .state import S, deploy_now, goto, pending_count, rescan, residual_scan, simulate_drift
+from .ai_panel import render_ai_rescan
 from .views_remediate import render_queue
 
 LANGS = {".py": "python", ".js": "javascript", ".ts": "typescript", ".json": "json", ".yml": "yaml",
@@ -110,6 +111,7 @@ def view_rescan() -> None:
             C.empty_state("radar", "No rescan yet", "Press Rescan now to compare the current copy with the baseline.")
     if S.rescan_new:
         render_queue("p5", S.plan5)
+    render_ai_rescan()
     with st.container(border=True):
         C.section("Remaining risks", "Everything the latest scan still reports, including baseline findings.", "bug")
         remaining = S.last_scan.findings if S.last_scan else []

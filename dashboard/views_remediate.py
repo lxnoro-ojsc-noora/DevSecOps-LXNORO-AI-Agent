@@ -11,6 +11,7 @@ import streamlit as st
 from devsecops_agent import export, github_io, remediation
 
 from . import components as C
+from .ai_panel import render_ai_remediation
 from .state import S, SCOPES, apply_fixes, cfg_get, decide, goto, safe_name
 
 
@@ -91,6 +92,7 @@ def view_remediation() -> None:
             ("ok", "Original files are never modified; fixes are applied to a copy and every action is audited."),
         ])
     render_queue("p2", plan)
+    render_ai_remediation()
     with st.container(border=True):
         C.section("Audit trail", "Decisions and remediation actions, newest first (UTC).", "list")
         C.md(C.timeline(S.audit))
@@ -131,9 +133,10 @@ def _export_card(changed: dict) -> None:
 
 
 def _publish_card(changed: dict) -> None:
-    pub = github_io.load_publish_config(cfg_get)
-    missing = github_io.publish_blockers(cfg_get)
-    access = S.gh_access
+    live = S.mode == "live"
+    pub = github_io.load_publish_config(cfg_get) if live else None
+    missing = github_io.publish_blockers(cfg_get) if live else []
+    access = S.gh_access if live else None
     verified = bool(access and access.ok and access.can_push)
     with st.container(border=True):
         C.section("Publish to GitHub", "New branch and pull request only. Never the default branch, never a force-push.", "github")
@@ -148,7 +151,9 @@ def _publish_card(changed: dict) -> None:
             ("ok" if verified else "muted", "GitHub access verified: the token can push"),
             ("ok" if changed else "muted", "There are changed files to publish"),
         ])
-        if missing:
+        if not live:
+            st.warning("Publishing is disabled in simulation mode: no external changes are made.")
+        elif missing:
             st.warning("Publishing is disabled. Missing settings: " + ", ".join(missing)
                        + ". Configure them as Streamlit secrets; never put them in source control.")
         st.button("Verify GitHub access", on_click=_verify_github, disabled=pub is None,
