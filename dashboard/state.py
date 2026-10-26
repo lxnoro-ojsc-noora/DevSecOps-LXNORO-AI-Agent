@@ -12,11 +12,14 @@ from datetime import datetime, timezone
 import streamlit as st
 
 from devsecops_agent import ai as ai_mod
+from devsecops_agent import orchestrator as orch
 from devsecops_agent import deploy, export, github_io, intake, monitor, remediation
 from devsecops_agent import report as report_mod
-from devsecops_agent.models import Check
+from devsecops_agent.ai import llm
+from devsecops_agent.demo import demo_project
+from devsecops_agent.models import Check, utc_now
 from devsecops_agent.safe_zip import UnsafeArchiveError
-from devsecops_agent.scanners import scan_project
+from devsecops_agent.pipeline import run_scans
 
 S = st.session_state
 
@@ -46,6 +49,8 @@ def _defaults() -> dict:
         "rescan_new": [], "last_scan": None, "last_rescan": None, "plan5": [], "decisions5": {},
         "logged5": set(), "apply5": None, "gh_access": None, "gh_result": None, "audit": [],
         "gitlab_session": None, "gitlab_output": [], "gitlab_msg": "", "gitlab_ok": "", "sim_paths": set(),
+        "ai_health": None, "ai_triage": None, "ai_fixes": None, "ai_validation": None, "ai_rescan": None,
+        "ai_msg": "", "base_plan": [],
     }
 
 
@@ -53,6 +58,8 @@ def init_state() -> None:
     for key, value in _defaults().items():
         if key not in S:
             S[key] = value
+    if "mode" not in S:
+        S["mode"] = "live"
     if "branch_default" not in S:
         S["branch_default"] = "lxnoro-agent/fixes-" + datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
 
@@ -108,7 +115,7 @@ def current_report() -> dict:
 
 def residual_scan():
     if S.residual is None:
-        S.residual = scan_project(S.corrected, list(S.project.binary_files))
+        S.residual = run_scans(S.corrected, list(S.project.binary_files), S.mode)
     return S.residual
 
 
@@ -148,7 +155,7 @@ def load_project(loader, label: str) -> None:
 
 def run_analysis(provider_id: str) -> None:
     bar = st.progress(5, text="Running deterministic checks (static; nothing is executed)...")
-    scan = scan_project(S.project.text_files, list(S.project.binary_files))
+    scan = run_scans(S.project.text_files, list(S.project.binary_files), S.mode)
     bar.progress(55, text="Deterministic checks complete.")
     ai_res = None
     cfg = ai_mod.load_config(cfg_get) if provider_id == "external" else None
@@ -172,6 +179,8 @@ def run_analysis(provider_id: str) -> None:
     S.corrected, S.zip_bytes, S.residual = None, None, None
     S.deployment, S.live_files, S.baseline, S.history = None, None, None, []
     S.gitlab_session, S.gitlab_output, S.gitlab_msg, S.gitlab_ok = None, [], "", ""
+    S.ai_triage, S.ai_fixes, S.ai_validation, S.ai_rescan, S.ai_msg = None, None, None, None, ""
+    S.base_plan = list(S.plan)
     remediation.audit_event(S.audit, "system", "analysis_completed", "analysis",
                             detail=f"{len(scan.findings)} finding(s); AI explanations: {'yes' if ai_res and ai_res.ok else 'no'}")
     bar.progress(100, text="Analysis complete.")
@@ -213,6 +222,113 @@ def gitlab_refresh() -> None:
         S.gitlab_msg = str(exc)
 
 
+def set_mode() -> None:
+    """Switch between live and simulation. The workflow is reset so results never mix modes."""
+    choice = S.get("mode_choice")
+    if choice in ("live", "simulation") and choice != S.mode:
+        reset_workflow()
+        S.mode = choice
+        S.stage = 1
+
+
+def ai_client():
+    """Return (client, reason). Live mode never falls back to the simulated client."""
+    if S.mode == "simulation":
+        return orch.SimulatedClient(), ""
+    cfg = ai_mod.load_config(cfg_get)
+    if cfg is None:
+        return None, ("Live AI is unavailable: no external provider is configured "
+                      "(set AI_PROVIDER, AI_API_KEY and AI_MODEL as secrets). Switch to Simulation mode for a labelled demo.")
+    return orch.LiveClient(cfg), ""
+
+
+def load_demo() -> None:
+    if S.mode != "simulation":
+        return
+    project = demo_project()
+    reset_workflow()
+    S.project = project
+    remediation.audit_event(S.audit, "system", "project_loaded", "intake",
+                            detail="SIMULATED demo project (built-in, never executed)")
+    S.stage = 2
+
+
+def ai_test() -> None:
+    client, reason = ai_client()
+    if client is None:
+        S.ai_health = {"state": "unavailable", "detail": reason}
+    elif not client.live:
+        S.ai_health = {"state": "simulated", "detail": "Simulation mode: no model is called."}
+    else:
+        res = llm.ping(client.cfg)
+        detail = f"{res.message} ({res.latency_ms} ms)" if res.ok else f"{res.kind}: {res.message}"
+        S.ai_health = {"state": "verified" if res.ok else "failed", "detail": detail, "ts": utc_now()}
+
+
+def _ai_run(action: str, scope: str, fn) -> None:
+    client, reason = ai_client()
+    if client is None:
+        S.ai_msg = reason
+        return
+    try:
+        detail = fn(client)
+    except llm.AIError as exc:
+        S.ai_msg = f"{action} failed ({exc.kind}): {exc}"
+        return
+    S.ai_msg = ""
+    remediation.audit_event(S.audit, "system", action, scope, detail=f"{client.label}: {detail}")
+
+
+def ai_triage_action() -> None:
+    if not S.scan:
+        return
+
+    def run(client):
+        S.ai_triage = orch.triage(client, S.scan.findings)
+        return f"{len(S.ai_triage.priorities)} ranked, {S.ai_triage.discarded} discarded"
+
+    _ai_run("ai_triage", "analysis", run)
+
+
+def ai_fixes_action() -> None:
+    if not S.scan:
+        return
+
+    def run(client):
+        S.ai_fixes = orch.propose_fixes(client, S.project.text_files, S.scan.findings)
+        S.plan = list(S.base_plan) + S.ai_fixes.candidates
+        return (f"{len(S.ai_fixes.candidates)} candidate(s) passed deterministic checks, "
+                f"{len(S.ai_fixes.rejected)} rejected")
+
+    _ai_run("ai_fixes_proposed", "remediation", run)
+
+
+def ai_validation_action() -> None:
+    if not S.apply_result:
+        return
+
+    def run(client):
+        facts = orch.validation_facts(S.plan, S.apply_result.statuses)
+        S.ai_validation = orch.summarize(client, "validation", facts)
+        return "validation summary produced"
+
+    _ai_run("ai_validation_summary", "remediation", run)
+
+
+def ai_rescan_action() -> None:
+    if not (S.last_scan and S.last_rescan):
+        S.ai_msg = "Run a rescan first: there is nothing to interpret yet."
+        return
+
+    def run(client):
+        lr = S.last_rescan
+        facts = orch.rescan_facts(lr["kind"], lr["baseline"], S.last_scan.findings, S.rescan_new, lr["resolved"])
+        S.ai_rescan = orch.summarize(client, "rescan", facts)
+        return "rescan interpretation produced"
+
+    _ai_run("ai_rescan_interpretation", "post-deployment", run)
+
+
 def decide(prefix: str, item, decision: str) -> None:
     sc = SCOPES[prefix]
     try:
@@ -224,7 +340,7 @@ def decide(prefix: str, item, decision: str) -> None:
 
 
 def rescan(kind: str) -> None:
-    scan = scan_project(S.live_files, list(S.project.binary_files))
+    scan = run_scans(S.live_files, list(S.project.binary_files), S.mode)
     new, resolved = monitor.record_scan(S.history, kind, scan, S.baseline)
     S.rescan_new, S.last_scan = new, scan
     S.last_rescan = {"kind": kind, "baseline": len(S.baseline or ()), "current": len(scan.findings),
