@@ -72,10 +72,10 @@ def render_ai_panel() -> None:
                  f'<span class="loc">{C.esc(health["detail"])}</span></div>')
         ready = client is not None and S.scan is not None
         c1, c2, c3 = st.columns(3)
-        c1.button("Test connection", on_click=ai_test, key="ai_test", icon=":material/refresh:")
-        c2.button("Prioritise findings", on_click=ai_triage_action, key="ai_triage", icon=":material/radar:",
+        c1.button("Test connection", on_click=ai_test, key="btn_ai_test", icon=":material/refresh:")
+        c2.button("Prioritise findings", on_click=ai_triage_action, key="btn_ai_triage", icon=":material/radar:",
                   disabled=not ready)
-        c3.button("Propose candidate fixes", on_click=ai_fixes_action, key="ai_fixes", icon=":material/build:",
+        c3.button("Propose candidate fixes", on_click=ai_fixes_action, key="btn_ai_fixes", icon=":material/build:",
                   disabled=not ready)
         if S.ai_msg:
             st.error(S.ai_msg)
@@ -88,9 +88,9 @@ def render_ai_remediation() -> None:
     with st.container(border=True):
         C.section("AI assistance", "Candidate fixes and validation summaries. AI never applies anything.", "sparkles")
         c1, c2 = st.columns(2)
-        c1.button("Propose candidate fixes", on_click=ai_fixes_action, key="ai_fixes_rem", icon=":material/build:",
+        c1.button("Propose candidate fixes", on_click=ai_fixes_action, key="btn_ai_fixes_rem", icon=":material/build:",
                   disabled=client is None or S.scan is None)
-        c2.button("Summarise validation results", on_click=ai_validation_action, key="ai_validation",
+        c2.button("Summarise validation results", on_click=ai_validation_action, key="btn_ai_validation",
                   icon=":material/description:", disabled=client is None or S.apply_result is None)
         if client is None:
             st.caption(reason)
@@ -108,7 +108,7 @@ def render_ai_rescan() -> None:
     client, reason = ai_client()
     with st.container(border=True):
         C.section("AI interpretation", "Advisory reading of the rescan and drift. Deterministic results stay authoritative.", "sparkles")
-        st.button("Interpret rescan and drift", on_click=ai_rescan_action, key="ai_rescan", icon=":material/radar:",
+        st.button("Interpret rescan and drift", on_click=ai_rescan_action, key="btn_ai_rescan", icon=":material/radar:",
                   disabled=client is None or S.last_rescan is None)
         if client is None:
             st.caption(reason)
