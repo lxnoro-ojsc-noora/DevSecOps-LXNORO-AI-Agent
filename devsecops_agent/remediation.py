@@ -79,7 +79,7 @@ FIXERS: dict[str, FixSpec] = {
     ),
     "PY-EVAL": FixSpec(
         "high",
-        "Replace eval() with ast.literal_eval() (parses literals only; behaviour may change)",
+        "Replace the eval call with ast.literal_eval (parses literals only; behaviour may change)",
         _fix_eval,
         "ast",
     ),

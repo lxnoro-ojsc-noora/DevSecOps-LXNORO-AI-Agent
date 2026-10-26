@@ -273,7 +273,7 @@ def render_queue(prefix: str, plan: list, base_files: dict) -> None:
     statuses = result.statuses if result else {}
     st.text_input("Approver name (required to approve or reject high-risk changes)", key=f"{prefix}_approver", max_chars=80)
     for r in plan:
-        digest = hashlib.sha1(r.finding_id.encode("utf-8")).hexdigest()[:10]
+        digest = hashlib.sha256(r.finding_id.encode("utf-8")).hexdigest()[:10]
         d = decisions.get(r.finding_id)
         state = statuses.get(r.finding_id) or (d.decision if d else ("awaiting approval" if r.needs_approval else "ready (auto)"))
         tag = "HUMAN APPROVAL REQUIRED" if r.needs_approval else "AUTO-ELIGIBLE (low risk)"
