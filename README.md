@@ -33,6 +33,7 @@ Settings are read from Streamlit secrets (`.streamlit/secrets.toml`, which is gi
 | `GITLAB_AI_WORKFLOW_DEFINITION` | optional | default `security_analyst_agent/v1`; ignored when `GITLAB_AI_CONSUMER_ID` is set |
 | `GITLAB_AI_CONSUMER_ID` | run the existing GitLab flow | numeric AI Catalog item consumer id of the flow enabled in the project (GraphQL `aiCatalogConfiguredItems`); no external model key is needed |
 | `GITLAB_AI_MR_IID` | optional | default merge request number the flow triages |
+| `GITLAB_AI_UPLOAD_FLOW` | optional, `1` | send an uploaded project's findings to the catalog flow instead of the agent; set only after the catalog copy of the flow contains the `UPLOADED-PROJECT-FINDINGS` mode check from `.gitlab/duo/flows/` |
 
 Example `.streamlit/secrets.toml` (placeholders only):
 
@@ -75,6 +76,8 @@ Both modes share the same approval, validation and audit rules. Live mode never 
 - **GitLab Duo triage of the uploaded project**: sends the current analysis' redacted findings (rule, severity, file and line, redacted evidence, summary counts; never code) to a read-only foundational agent session. The agent is told it cannot read the uploaded files and must not describe this repository, so the answer is advice on the findings, not a code review. The card shows the real session status and the agent's final answer read from the session trace, and ties both to the current analysis: a new analysis, project or mode switch clears them.
 - **Repository merge-request flow (not your upload)**: shown only when `GITLAB_AI_CONSUMER_ID` is set. It starts the AI Catalog flow already enabled in the project, which triages the CI security findings (`self-scan` report) of a merge request of the configured GitLab project, and displays the comment that flow posts. It does not analyse the project uploaded to the app. The catalog flow cannot take findings: its prompt, stored in the AI Catalog, treats the goal as a merge-request reference.
 
+**Uploaded project through the catalog flow (opt-in):** with `GITLAB_AI_CONSUMER_ID` and `GITLAB_AI_UPLOAD_FLOW=1`, the first card starts the catalog flow instead of the agent. The redacted findings travel in the `goal`, behind the first line `UPLOADED-PROJECT-FINDINGS`; the flow answers in its final answer, with no tools and no comment, and the app reads that answer from the session's own trace. This works only after you paste the updated `.gitlab/duo/flows/devsecops-triage-remediate.yaml` into the AI Catalog flow (the app cannot edit it). Without the flag the read-only agent is used. A session that is not finished after 30 minutes is reported as stopped waiting; the app never shows a comment from another merge request.
+
 Candidate fixes and per-finding explanations still use the external provider, because a Duo session is not a synchronous completion API.
 
 ## GitLab Duo flow and skill
@@ -96,6 +99,7 @@ Candidate fixes and per-finding explanations still use the external provider, be
 | External AI provider | mocked in unit tests; **real call only if** `AI_PROVIDER`, `AI_API_KEY` and `AI_MODEL` are set as masked CI/CD variables; **otherwise unverified** |
 | GitLab Duo triage of an uploaded project's findings | a real agent session (10115413) answered from a goal written in the app's format, using only the findings; the app's own HTTP client and trace parsing are verified with stand-in transports only |
 | Existing catalog flow on a repository merge request | real session (10114123) posted a triage comment; the app's own client is verified with stand-in transports only |
+| Uploaded findings through the catalog flow (`GITLAB_AI_UPLOAD_FLOW`) | stand-in transports only; **unverified** against GitLab until the catalog flow is updated and a real session is run |
 | GitHub import and publishing | fake transports only: **unverified** |
 | Real deployment, continuous monitoring, Semgrep inside the app | not implemented |
 | Browser look and feel, hosted deployment | not verified |

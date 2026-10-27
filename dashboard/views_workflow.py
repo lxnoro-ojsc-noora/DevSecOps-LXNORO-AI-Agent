@@ -114,7 +114,7 @@ def _gitlab_card() -> None:
             tone, label = ai_mod.describe_status(sess.status)
             link = f' - <a href="{C.esc(sess.web_url)}" target="_blank">open session in GitLab</a>' if sess.web_url else ""
             C.md(f'<div class="lx-q">{C.badge("Session " + str(sess.id), "info", "link")}{C.badge(label, tone)}'
-                 f'<span class="loc">Findings of {C.esc(S.duo_scope)}{link}</span></div>')
+                 f'<span class="loc">Findings of {C.esc(S.duo_scope)} via GitLab Duo {C.esc(S.duo_via or "agent")}{link}</span></div>')
             st.button("Refresh status and answer", on_click=duo_refresh, icon=":material/refresh:", key="gl_refresh")
             if sess.status not in ai_mod.TERMINAL and ai_mod.session_age_minutes(sess) > ai_mod.SLOW_AFTER_MINUTES:
                 st.warning(f"The session has not finished after {ai_mod.SLOW_AFTER_MINUTES} minutes. Open it in GitLab "

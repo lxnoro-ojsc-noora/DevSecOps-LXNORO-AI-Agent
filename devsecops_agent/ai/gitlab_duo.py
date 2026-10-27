@@ -34,6 +34,8 @@ DEFAULT_DEFINITION = "security_analyst_agent/v1"
 TERMINAL = ("finished", "failed", "stopped")
 SLOW_AFTER_MINUTES = 15
 CLOCK_SKEW = timedelta(seconds=120)
+GIVE_UP_MINUTES = 30  # the app stops waiting for a session after this long
+UPLOAD_MARKER = "UPLOADED-PROJECT-FINDINGS"  # first goal line; the flow source in .gitlab/duo/flows keys on it
 
 HINTS = {
     401: "The token was rejected (expired, revoked or wrong). Create a new GITLAB_AI_TOKEN.",
@@ -57,6 +59,7 @@ class GitLabAIConfig:
     workflow_definition: str = DEFAULT_DEFINITION
     consumer_id: str = ""  # AI Catalog item consumer of the existing flow; set means flow mode
     mr_iid: str = ""  # default merge request the flow triages
+    upload_flow: bool = False  # the catalog copy of the flow understands UPLOAD_MARKER goals
 
 
 @dataclass(frozen=True)
@@ -82,6 +85,7 @@ def load_gitlab_config(get):
     definition = (get("GITLAB_AI_WORKFLOW_DEFINITION") or DEFAULT_DEFINITION).strip()
     consumer = (get("GITLAB_AI_CONSUMER_ID") or "").strip()
     mr = (get("GITLAB_AI_MR_IID") or "").strip()
+    upload = (get("GITLAB_AI_UPLOAD_FLOW") or "").strip().lower() in ("1", "true", "yes")
     if not token or not re.fullmatch(r"\d{1,12}", project) or not https_only(base):
         return None
     if not re.fullmatch(r"[a-z0-9_]+/v[0-9]+", definition):
@@ -90,7 +94,7 @@ def load_gitlab_config(get):
         return None
     if mr and not re.fullmatch(r"\d{1,9}", mr):
         return None
-    return GitLabAIConfig(base, token, project, definition, consumer, mr)
+    return GitLabAIConfig(base, token, project, definition, consumer, mr, upload)
 
 
 def gitlab_status(get) -> ProviderStatus:
@@ -322,6 +326,30 @@ def submit_flow(cfg: GitLabAIConfig, mr, http=None) -> GitLabSession:
         "project_id": int(cfg.project_id),
         "ai_catalog_item_consumer_id": int(cfg.consumer_id),
         "goal": str(iid),
+        "start_workflow": True,
+    }
+    started = utc_now()
+    data = _call(cfg, "POST", FLOWS, payload, http).json()
+    try:
+        return GitLabSession(int(data["id"]), _own_url(cfg, data), str(data.get("status", "")), started)
+    except (KeyError, TypeError, ValueError):
+        raise GitLabAIError("GitLab returned an unexpected response; the session id is missing.") from None
+
+
+def submit_upload_flow(cfg: GitLabAIConfig, findings, http=None, context: dict | None = None) -> GitLabSession:
+    """Start the existing AI Catalog flow on an UPLOADED project's findings.
+
+    The findings travel in the goal (redacted, names and counts only, never code), the documented channel that works for
+    catalog flows. The answer is read from this session's trace, not from a merge request comment.
+    """
+    if not cfg.consumer_id:
+        raise GitLabAIError("GITLAB_AI_CONSUMER_ID is not set, so the existing flow cannot be started.")
+    if not context:
+        raise GitLabAIError("There is no uploaded-project context to send.")
+    payload = {
+        "project_id": int(cfg.project_id),
+        "ai_catalog_item_consumer_id": int(cfg.consumer_id),
+        "goal": UPLOAD_MARKER + "\n" + build_goal(findings, context=context),
         "start_workflow": True,
     }
     started = utc_now()
