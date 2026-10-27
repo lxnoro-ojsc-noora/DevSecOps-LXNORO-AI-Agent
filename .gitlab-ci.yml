@@ -1,0 +1,55 @@
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+      when: never
+    - if: $CI_COMMIT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+
+stages:
+  - test
+
+include:
+  - template: Jobs/SAST.gitlab-ci.yml
+  - template: Jobs/Secret-Detection.gitlab-ci.yml
+
+# The security templates run in branch pipelines only by default. The workflow rules above create merge
+# request pipelines while an MR is open, so without this variable SAST and Secret Detection never ran there.
+variables:
+  AST_ENABLE_MR_PIPELINES: "true"
+
+unit-tests:
+  stage: test
+  image: python:3.12-slim
+  script:
+    - pip install --no-cache-dir -r requirements.txt pytest
+    - python -m pytest -q --junitxml=report.xml
+  artifacts:
+    when: always
+    reports:
+      junit: report.xml
+
+# Genuine live tests: a real OSV.dev query and, only if AI_PROVIDER, AI_API_KEY and AI_MODEL are set as
+# masked CI/CD variables, a real AI provider request. Missing network or credentials produce explicit
+# skips with a reason (the integration is then reported as unverified), never a fake pass.
+live-integration:
+  stage: test
+  image: python:3.12-slim
+  script:
+    - pip install --no-cache-dir -r requirements.txt pytest
+    - python -m pytest -q -o addopts="" -m live -rs
+  allow_failure: true
+
+# Runs this tool's own deterministic scanner over this repository (static, nothing executed).
+# Informational: it scans THIS repository only, not any project a user uploads to the app.
+# Also runs in scheduled pipelines if a schedule is created in the GitLab UI.
+self-scan:
+  stage: test
+  image: python:3.12-slim
+  script:
+    - python -m devsecops_agent.cli . --exclude tests --exclude devsecops_agent/scanners.py --out scan-report.json
+  artifacts:
+    when: always
+    paths:
+      - scan-report.json
+  allow_failure: true

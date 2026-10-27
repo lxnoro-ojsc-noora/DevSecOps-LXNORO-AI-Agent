@@ -1,93 +1,67 @@
-# Showcase
+# DevSecOps LXNORO AI Agent
 
-Transcend Hackathon Showcase workspace for @nooraalmaola (DevPost: nooraalmaola). Visit the [onboarding issue](https://gitlab.com/gitlab-ai-hackathon/transcend-october-2026/43725688/showcase/-/work_items/1) to get started.
+A Streamlit security command center (GitLab Transcend hackathon). It scans a source ZIP or a public GitHub repository with real engines, lets an optional AI orchestrator prioritise findings and propose fixes, applies **only low-risk fixes automatically**, and **requires a named human approval for every high-risk or AI-proposed change**. Uploaded code is never executed.
 
-## Getting started
+MIT License. Copyright (c) 2026 NOORA AL-MAOLAI, Research Center: LXNORO OJSC.
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
-
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
-
-## Add your files
-
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+## Run
 
 ```
-cd existing_repo
-git remote add origin https://gitlab.com/gitlab-ai-hackathon/transcend-october-2026/43725688/showcase.git
-git branch -M main
-git push -uf origin main
+pip install -r requirements.txt
+streamlit run app.py          # http://localhost:8501
+python -m pytest -q           # mocked and unit tests (live tests are excluded)
 ```
 
-## Integrate with your tools
+## Live and Simulation mode (selector at the top of the page)
 
-* [Set up project integrations](https://gitlab.com/gitlab-ai-hackathon/transcend-october-2026/43725688/showcase/-/settings/integrations)
+| | LIVE | SIMULATION |
+|---|---|---|
+| Scanners | built-in rules, **Bandit**, **OSV.dev** (network) | built-in rules, Bandit, labelled offline advisory fixture |
+| AI | your configured provider only; no key means "unavailable" | deterministic templates, labelled SIMULATED, not a model |
+| Intake | ZIP upload, public GitHub import | the above plus a built-in demo project |
+| GitHub publishing / GitLab AI | available when configured | disabled: no external changes |
+| Deployment | **simulation only** (no deployment provider exists) | simulation |
 
-## Collaborate with your team
+Both modes share the same approval, validation and audit rules. Live mode never falls back to simulation after an error; switching mode resets the workflow.
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+## The seven stages
 
-## Test and Deploy
+1. **Intake**: hardened in-memory ZIP handling; public GitHub archive import.
+2. **Analysis**: built-in rules, Bandit (run as a subprocess, no shell, private temp dir, timeout; it parses code, never runs it), OSV.dev for pinned PyPI requirements. Missing tools or failed requests show as *unavailable*.
+3. **Report**: risk level, strengths, weaknesses, plan; JSON/Markdown with a separately labelled AI section; manual GitLab Duo hand-off brief.
+4. **Remediation**: diffs, approval queue, audit trail. Auto-apply only when severity is below high and the fixer is low risk. AI candidates always need approval (enforced in `remediation.apply_remediations`).
+5. **Export**: corrected ZIP; GitHub publishing (new branch and pull request only) when configured. Stage-7 fixes update this canonical project; simulated drift files are never exported.
+6. **Deploy**: simulation only; gate, package digest and scan are computed, the rest is simulated.
+7. **Rescan**: on-demand comparison with the deployment baseline (new, resolved, remaining) and an optional AI interpretation. Not continuous monitoring.
 
-Use the built-in continuous integration in GitLab.
+## AI orchestration
 
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
+`devsecops_agent/orchestrator.py` asks the model for triage, candidate fixes and summaries, and treats every answer as untrusted: strict JSON parsing, ids checked against real findings, secrets redacted, and each candidate fix must be one line, free of secret-like text, compile (never executed), no longer be flagged by the deterministic scanner, and pass named human approval. Secret-bearing lines are never sent to the model.
 
-***
+**Primary provider: external API** (`devsecops_agent/ai/`), configured with Streamlit secrets or environment variables, never in the UI:
 
-# Editing this README
+- `AI_PROVIDER`: `anthropic`, `gemini`, or `openai` (any OpenAI-compatible server)
+- `AI_API_KEY`, `AI_MODEL`, and for `openai` an optional https `AI_ENDPOINT`
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+**Optional: GitLab Duo Agent Platform** uses the documented, experimental Flows API to submit a read-only, asynchronous triage session (live mode only): `GITLAB_AI_TOKEN`, `GITLAB_AI_PROJECT_ID`, optional `GITLAB_URL`, `GITLAB_AI_WORKFLOW_DEFINITION`. The Duo Chat completions API is internal-only on GitLab.com and is not used.
 
-## Suggestions for a good README
+**GitHub publishing** needs `GITHUB_TOKEN` (fine-grained, one repository), `PUBLISH_REPO` (`owner/repo`) and `PUBLISH_KEY`; it refuses the default branch and never force-pushes.
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+## Verified versus unverified
 
-## Name
-Choose a self-explaining name for your project.
+| Capability | Evidence |
+|---|---|
+| Scanner, remediation gates, export, secret redaction, approvals, audit, stage-7 export consistency | unit and headless UI tests in CI |
+| Whole seven-stage UI flow, both modes, AI orchestration wiring | headless `AppTest` with a stand-in provider (wiring only) |
+| Bandit | really executed in CI tests |
+| OSV.dev | mocked in unit tests; **real query only in the `live-integration` CI job**, skipped with a reason if the network is unreachable |
+| External AI provider | mocked in unit tests; **real call only if** the AI variables are set in CI; **otherwise unverified** |
+| GitLab Flows API, GitHub publishing | fake transports only: **unverified** |
+| Real deployment, continuous monitoring, Semgrep in the app | not implemented |
+| Browser look and feel, Streamlit Community Cloud | not verified |
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+To verify live AI in CI, add masked CI/CD variables `AI_PROVIDER`, `AI_API_KEY`, `AI_MODEL`, then read the `live-integration` job log.
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+## Repository
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
-
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
-
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
-
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+`.gitlab-ci.yml` runs pytest, SAST, Secret Detection, `self-scan` and `live-integration`. `.gitlab/duo/mr-review-instructions.yaml` and `AGENTS.md` configure GitLab Duo for this repository.

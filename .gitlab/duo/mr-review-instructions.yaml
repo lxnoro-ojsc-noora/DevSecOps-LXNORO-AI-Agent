@@ -1,0 +1,22 @@
+instructions:
+  - name: Remediation and approval policy
+    fileFilters:
+      - "devsecops_agent/remediation.py"
+      - "devsecops_agent/deploy.py"
+      - "app.py"
+    instructions: |
+      1. Check that a high or critical severity change cannot be applied without a recorded approval from a named human.
+      2. Check that every applied, approved, rejected or skipped change is written to the audit log.
+      3. Check that simulated behaviour (deployment, drift) is labelled as simulated everywhere it is shown.
+  - name: Untrusted input and secret handling
+    fileFilters:
+      - "devsecops_agent/safe_zip.py"
+      - "devsecops_agent/intake.py"
+      - "devsecops_agent/scanners.py"
+      - "devsecops_agent/github_io.py"
+      - "devsecops_agent/ai/*.py"
+    instructions: |
+      1. Check that uploaded or imported project content is never executed, imported or evaluated.
+      2. Check that archive handling resists path traversal, symlinks, oversize files and compression bombs.
+      3. Check that tokens, API keys and secret-like evidence are never logged, rendered, reported or included in error text.
+      4. Check that GitHub publishing only creates a new branch and pull request and never force-pushes or targets the default branch.
