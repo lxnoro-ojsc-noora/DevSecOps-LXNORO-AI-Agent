@@ -32,6 +32,7 @@ FLOWS = "/api/v4/ai/duo_workflows/workflows"
 READ_ONLY_PRIVILEGES = [2]  # read_only_gitlab, per the Flows API privilege list
 DEFAULT_DEFINITION = "security_analyst_agent/v1"
 TERMINAL = ("finished", "failed", "stopped")
+UNKNOWN_STATUS = "unknown"  # the token is valid but GitLab will not let it read the session status
 SLOW_AFTER_MINUTES = 15
 CLOCK_SKEW = timedelta(seconds=120)
 GIVE_UP_MINUTES = 30  # the app stops waiting for a session after this long
@@ -49,6 +50,8 @@ HINTS = {
 
 class GitLabAIError(RuntimeError):
     """A GitLab AI call failed. Messages never contain the token."""
+
+    status = 0  # HTTP status when GitLab answered, otherwise 0
 
 
 @dataclass(frozen=True)
@@ -152,12 +155,24 @@ def _call(cfg: GitLabAIConfig, method: str, path: str, payload=None, http=None):
             message = ""
         message = message.replace(cfg.token, "[token]")[:300]
         hint = HINTS.get(resp.status_code, "")
-        raise GitLabAIError(f"GitLab returned HTTP {resp.status_code}. {hint} {message}".strip())
+        err = GitLabAIError(f"GitLab returned HTTP {resp.status_code}. {hint} {message}".strip())
+        err.status = resp.status_code
+        raise err
     return resp
 
 
 def check_access(cfg: GitLabAIConfig, http=None):
-    """Confirms the token can read the project. Does NOT prove Duo Agent Platform is available."""
+    """Confirms the token is accepted. Does NOT prove a session can be created or that quota is available.
+
+    A fine-grained token with only the Duo workflow permissions cannot read the project, so the Duo read endpoint
+    (agent_privileges) is tried first and a project read is only the fallback.
+    """
+    try:
+        _call(cfg, "GET", f"{FLOWS}/agent_privileges", http=http)
+        return True, ("Token is accepted by the GitLab Duo Flows API (read). Creating a session is only proven "
+                      "when one starts.")
+    except GitLabAIError:
+        pass
     try:
         data = _call(cfg, "GET", f"/api/v4/projects/{cfg.project_id}", http=http).json()
     except GitLabAIError as exc:
@@ -220,7 +235,17 @@ def submit_triage(cfg: GitLabAIConfig, findings, http=None, context: dict | None
 
 
 def get_session(cfg: GitLabAIConfig, session_id: int, http=None, started_at: str = "") -> GitLabSession:
-    data = _call(cfg, "GET", f"{FLOWS}/{int(session_id)}", http=http).json()
+    try:
+        data = _call(cfg, "GET", f"{FLOWS}/{int(session_id)}", http=http).json()
+    except GitLabAIError as exc:
+        if exc.status not in (401, 403):
+            raise
+        # Fine-grained tokens cannot read this endpoint. Only call the status unknown if the token is otherwise valid.
+        try:
+            _call(cfg, "GET", f"{FLOWS}/agent_privileges", http=http)
+        except GitLabAIError:
+            raise exc from None
+        return GitLabSession(int(session_id), "", UNKNOWN_STATUS, started_at)
     return GitLabSession(int(data.get("id", session_id)), _own_url(cfg, data), str(data.get("status", "")), started_at)
 
 
@@ -284,6 +309,7 @@ def get_final_answer(cfg: GitLabAIConfig, session_id: int, http=None) -> str:
 _STATUS = {
     "created": ("warn", "Queued in GitLab"), "running": ("info", "Running"), "finished": ("ok", "Finished"),
     "failed": ("bad", "Failed"), "stopped": ("bad", "Stopped"), "paused": ("warn", "Paused"),
+    "unknown": ("warn", "Status not readable with this token"),
     "idle": ("warn", "Idle"), "input_required": ("warn", "Waiting for input in GitLab"),
     "plan_approval_required": ("warn", "Waiting for approval in GitLab"),
     "tool_call_approval_required": ("warn", "Waiting for approval in GitLab"),

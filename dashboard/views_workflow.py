@@ -120,7 +120,9 @@ def _gitlab_card() -> None:
                 st.warning(f"The session has not finished after {ai_mod.SLOW_AFTER_MINUTES} minutes. Open it in GitLab "
                            "to see where it is waiting.")
             if S.duo_answer:
-                C.md(f'<div class="lx-q">{C.badge("LIVE: answer from the GitLab Duo agent", "ok", "sparkles")}'
+                label = ("LIVE: latest agent message (completion not confirmed)" if S.duo_partial
+                         else "LIVE: answer from the GitLab Duo agent")
+                C.md(f'<div class="lx-q">{C.badge(label, "warn" if S.duo_partial else "ok", "sparkles")}'
                      '<span class="loc">Advice on the findings above; the agent could not read the code.</span></div>')
                 st.markdown(redact(S.duo_answer)[:6000])
 

@@ -5,6 +5,7 @@ this module only wires user actions to those backend operations.
 """
 from __future__ import annotations
 
+import dataclasses
 import os
 import re
 from datetime import datetime, timezone
@@ -52,7 +53,7 @@ def _defaults() -> dict:
         "gitlab_session": None, "gitlab_output": [], "gitlab_msg": "", "gitlab_ok": "", "sim_paths": set(),
         "ai_health": None, "ai_triage": None, "ai_fixes": None, "ai_validation": None, "ai_rescan": None,
         "ai_msg": "", "base_plan": [], "gitlab_result": None, "gitlab_kind": "", "gitlab_mr": "",
-        "duo_session": None, "duo_answer": "", "duo_msg": "", "duo_scope": "", "duo_via": "",
+        "duo_session": None, "duo_answer": "", "duo_msg": "", "duo_scope": "", "duo_via": "", "duo_partial": False,
     }
 
 
@@ -141,7 +142,8 @@ def ai_section() -> dict:
         out["gitlab_duo_agent"] = {
             "origin": "live",
             "provider": (f"GitLab Duo {S.duo_via or 'agent'} session {S.duo_session.id}: advice on this project's scanner findings only; "
-                         "the agent could not read the code"),
+                         "the agent could not read the code"
+                         + ("; latest message only, completion not confirmed" if S.duo_partial else "")),
             "text": redact(S.duo_answer)[:3000],
         }
     return out
@@ -225,6 +227,7 @@ def run_analysis(provider_id: str) -> None:
     S.gitlab_session, S.gitlab_output, S.gitlab_msg, S.gitlab_ok = None, [], "", ""
     S.gitlab_result, S.gitlab_kind, S.gitlab_mr = None, "", ""
     S.duo_session, S.duo_answer, S.duo_msg, S.duo_scope, S.duo_via = None, "", "", "", ""
+    S.duo_partial = False
     S.ai_triage, S.ai_fixes, S.ai_validation, S.ai_rescan, S.ai_msg = None, None, None, None, ""
     S.base_plan = list(S.plan)
     remediation.audit_event(S.audit, "system", "analysis_completed", "analysis",
@@ -259,6 +262,7 @@ def duo_submit() -> None:
         S.duo_msg = str(exc)
         return
     S.duo_session, S.duo_answer, S.duo_msg, S.gitlab_ok = session, "", "", ""
+    S.duo_partial = False
     S.duo_scope = f"{context['project']}, {len(S.scan.findings)} finding(s)"
     S.duo_via = via
     remediation.audit_event(S.audit, "system", "gitlab_session_submitted", "analysis",
@@ -273,16 +277,25 @@ def duo_refresh() -> None:
         return
     try:
         session = ai_mod.get_session(cfg, old.id, started_at=old.started_at)
+        if not session.web_url and old.web_url:
+            session = dataclasses.replace(session, web_url=old.web_url)
         S.duo_session = session
         S.duo_msg = ""
-        if session.status == "finished" and not S.duo_answer:
+        if session.status == "finished" and (not S.duo_answer or S.duo_partial):
             answer = ai_mod.get_final_answer(cfg, session.id)
             if answer:
-                S.duo_answer = answer
+                S.duo_answer, S.duo_partial = answer, False
                 remediation.audit_event(S.audit, "system", "gitlab_duo_answer", "analysis",
                                         detail=f"Answer retrieved from Duo agent session {session.id}")
             else:
                 S.duo_msg = "The session finished but its trace has no answer text. Open the session in GitLab."
+        elif session.status == ai_mod.UNKNOWN_STATUS:
+            answer = ai_mod.get_final_answer(cfg, session.id)
+            if answer:
+                S.duo_answer, S.duo_partial = answer, True
+            S.duo_msg = ("This token is valid but GitLab does not let it read the session status, so completion cannot "
+                         "be confirmed. The latest agent message from the trace is shown below if there is one. Open "
+                         "the session in GitLab to see whether it finished.")
         elif session.status not in ai_mod.TERMINAL and ai_mod.session_age_minutes(session) > ai_mod.GIVE_UP_MINUTES:
             S.duo_msg = (f"Stopped waiting: the session is still {session.status or 'unfinished'} after "
                          f"{ai_mod.GIVE_UP_MINUTES} minutes. Open it in GitLab to see where it is stuck.")

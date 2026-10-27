@@ -28,7 +28,7 @@ from .gitlab_duo import (
     submit_upload_flow,
     upload_context,
 )
-from .gitlab_duo import GIVE_UP_MINUTES, UPLOAD_MARKER
+from .gitlab_duo import GIVE_UP_MINUTES, UNKNOWN_STATUS, UPLOAD_MARKER
 from .registry import provider_statuses
 
 __all__ = [
