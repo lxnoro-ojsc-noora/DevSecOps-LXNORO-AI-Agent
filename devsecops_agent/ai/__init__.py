@@ -16,6 +16,7 @@ from .gitlab_duo import (
     check_access,
     describe_status,
     fetch_flow_result,
+    get_final_answer,
     get_output,
     get_session,
     gitlab_status,
@@ -24,7 +25,10 @@ from .gitlab_duo import (
     session_age_minutes,
     submit_flow,
     submit_triage,
+    submit_upload_flow,
+    upload_context,
 )
+from .gitlab_duo import GIVE_UP_MINUTES, UPLOAD_MARKER
 from .registry import provider_statuses
 
 __all__ = [
@@ -33,5 +37,6 @@ __all__ = [
     "GitLabSession", "FlowResult", "build_goal", "chat_api_status", "check_access", "get_output", "get_session",
     "gitlab_status", "load_gitlab_config", "submit_triage", "provider_statuses", "submit_flow",
     "fetch_flow_result", "describe_status", "parse_mr_iid", "session_age_minutes", "TERMINAL",
-    "SLOW_AFTER_MINUTES",
+    "SLOW_AFTER_MINUTES", "get_final_answer", "upload_context", "submit_upload_flow", "GIVE_UP_MINUTES",
+    "UPLOAD_MARKER",
 ]

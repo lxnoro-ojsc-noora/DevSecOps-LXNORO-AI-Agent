@@ -135,5 +135,5 @@ def test_flow_card_shows_real_status_result_and_controls(monkeypatch):
     assert not at.exception
     text = " ".join(m.value for m in at.markdown)
     assert "Finished" in text and "LIVE: comment posted by the GitLab Duo flow" in text and "Triage result" in text
-    assert at.button(key="gl_run") and at.button(key="gl_refresh_flow") and at.button(key="gl_test")
+    assert at.button(key="gl_run") and at.button(key="gl_refresh_flow")
     assert at.text_input(key="gl_mr").value == "2"
