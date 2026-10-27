@@ -30,7 +30,9 @@ Settings are read from Streamlit secrets (`.streamlit/secrets.toml`, which is gi
 | `GITLAB_AI_TOKEN` | GitLab Duo triage session | token allowed to create Duo sessions in the project |
 | `GITLAB_AI_PROJECT_ID` | GitLab Duo triage session | numeric project id |
 | `GITLAB_URL` | optional | https; default `https://gitlab.com` |
-| `GITLAB_AI_WORKFLOW_DEFINITION` | optional | default `security_analyst_agent/v1` |
+| `GITLAB_AI_WORKFLOW_DEFINITION` | optional | default `security_analyst_agent/v1`; ignored when `GITLAB_AI_CONSUMER_ID` is set |
+| `GITLAB_AI_CONSUMER_ID` | run the existing GitLab flow | numeric AI Catalog item consumer id of the flow enabled in the project (GraphQL `aiCatalogConfiguredItems`); no external model key is needed |
+| `GITLAB_AI_MR_IID` | optional | default merge request number the flow triages |
 
 Example `.streamlit/secrets.toml` (placeholders only):
 
@@ -68,7 +70,7 @@ Both modes share the same approval, validation and audit rules. Live mode never 
 
 **External API provider** (`devsecops_agent/ai/`): set `AI_PROVIDER`, `AI_API_KEY` and `AI_MODEL` as described above. The UI offers a connection test that makes one real request.
 
-**GitLab Duo Agent Platform provider**: submits a read-only triage session through the Flows API (asynchronous; the output lives in GitLab).
+**GitLab Duo Agent Platform provider**: asynchronous, the output lives in GitLab, and it needs no external model key. With `GITLAB_AI_CONSUMER_ID` set, the Analysis stage shows a **GitLab Duo flow** card that starts the flow already enabled in the project, shows the real session status, and displays the comment the flow posts on the chosen merge request. That flow triages the CI security findings of a merge request of the configured GitLab project; it does not analyse the project uploaded to the app. Without `GITLAB_AI_CONSUMER_ID` the app submits a read-only session to a foundational agent instead. Candidate fixes and per-finding explanations still use the external provider, because a Duo session is not a synchronous completion API.
 
 ## GitLab Duo flow and skill
 
