@@ -71,6 +71,7 @@ def digest(finding_id):
 def text_of(at):
     chunks = [m.value for m in at.markdown] + [c.value for c in at.code] + [t.value for t in at.text]
     chunks += [c.value for c in at.caption] + [e.value for e in at.error]
+    chunks += [w.value for w in at.warning]
     return "\n".join(chunks)
 
 
@@ -166,6 +167,7 @@ def test_live_failure_is_reported_and_never_replaced_by_a_mock_answer(live_ai, m
 
 def test_connection_test_reports_verified_and_failed_states(live_ai, monkeypatch):
     at = seeded(SHELL_APP)
+    at.button(key="btn_scan").click().run()
     assert at.session_state["ai_health"] is None  # nothing is claimed before a real test
     monkeypatch.setattr(llm, "ping", lambda cfg, post=None: llm.HealthResult(True, "ok", "fake answered.", 12))
     at.button(key="btn_ai_test").click().run()

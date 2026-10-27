@@ -13,6 +13,11 @@ include:
   - template: Jobs/SAST.gitlab-ci.yml
   - template: Jobs/Secret-Detection.gitlab-ci.yml
 
+# The security templates run in branch pipelines only by default. The workflow rules above create merge
+# request pipelines while an MR is open, so without this variable SAST and Secret Detection never ran there.
+variables:
+  AST_ENABLE_MR_PIPELINES: "true"
+
 unit-tests:
   stage: test
   image: python:3.12-slim

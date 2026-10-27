@@ -14,7 +14,7 @@ instructions:
       - "devsecops_agent/intake.py"
       - "devsecops_agent/scanners.py"
       - "devsecops_agent/github_io.py"
-      - "devsecops_agent/ai.py"
+      - "devsecops_agent/ai/*.py"
     instructions: |
       1. Check that uploaded or imported project content is never executed, imported or evaluated.
       2. Check that archive handling resists path traversal, symlinks, oversize files and compression bombs.

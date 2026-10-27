@@ -3,8 +3,8 @@
 DevSecOps LXNORO AI Agent: a Streamlit app that statically analyzes uploaded or imported source code, reports findings, applies only low-risk fixes automatically, and requires named human approval for high/critical changes.
 
 ## Layout
-- `app.py`: Streamlit UI (five panels). `.streamlit/config.toml`: dark theme.
-- `devsecops_agent/`: `safe_zip` (intake), `scanners`, `remediation` (policy, fixers, approvals, audit), `report`, `export`, `github_io`, `intake`, `ai` (optional), `deploy` (simulation), `monitor` (on-demand rescan), `cli`.
+- `app.py`: Streamlit entry point (seven stages); views and session state live in `dashboard/`. `.streamlit/config.toml`: dark theme.
+- `devsecops_agent/`: `safe_zip` (intake), `scanners` (built-in rules), `engines` (Bandit, OSV.dev), `pipeline` (combined scan), `remediation` (policy, fixers, approvals, audit), `orchestrator` (AI triage and candidate fixes), `report`, `export`, `github_io`, `intake`, `ai/` (optional providers), `deploy` (simulation), `monitor` (on-demand rescan), `cli`.
 - `tests/`: pytest suite. Run `python -m pytest -q`.
 
 ## Rules for changes
