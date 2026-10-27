@@ -70,7 +70,12 @@ Both modes share the same approval, validation and audit rules. Live mode never 
 
 **External API provider** (`devsecops_agent/ai/`): set `AI_PROVIDER`, `AI_API_KEY` and `AI_MODEL` as described above. The UI offers a connection test that makes one real request.
 
-**GitLab Duo Agent Platform provider**: asynchronous, the output lives in GitLab, and it needs no external model key. With `GITLAB_AI_CONSUMER_ID` set, the Analysis stage shows a **GitLab Duo flow** card that starts the flow already enabled in the project, shows the real session status, and displays the comment the flow posts on the chosen merge request. That flow triages the CI security findings of a merge request of the configured GitLab project; it does not analyse the project uploaded to the app. Without `GITLAB_AI_CONSUMER_ID` the app submits a read-only session to a foundational agent instead. Candidate fixes and per-finding explanations still use the external provider, because a Duo session is not a synchronous completion API.
+**GitLab Duo Agent Platform provider** (asynchronous, the output lives in GitLab, no external model key). Choose "GitLab Duo Agent Platform" in the Analysis stage; two separate cards can appear:
+
+- **GitLab Duo triage of the uploaded project**: sends the current analysis' redacted findings (rule, severity, file and line, redacted evidence, summary counts; never code) to a read-only foundational agent session. The agent is told it cannot read the uploaded files and must not describe this repository, so the answer is advice on the findings, not a code review. The card shows the real session status and the agent's final answer read from the session trace, and ties both to the current analysis: a new analysis, project or mode switch clears them.
+- **Repository merge-request flow (not your upload)**: shown only when `GITLAB_AI_CONSUMER_ID` is set. It starts the AI Catalog flow already enabled in the project, which triages the CI security findings (`self-scan` report) of a merge request of the configured GitLab project, and displays the comment that flow posts. It does not analyse the project uploaded to the app. The catalog flow cannot take findings: its prompt, stored in the AI Catalog, treats the goal as a merge-request reference.
+
+Candidate fixes and per-finding explanations still use the external provider, because a Duo session is not a synchronous completion API.
 
 ## GitLab Duo flow and skill
 
@@ -89,7 +94,9 @@ Both modes share the same approval, validation and audit rules. Live mode never 
 | OSV.dev | mocked in unit tests; **real query in the `live-integration` CI job**, skipped with a reason if the network is unreachable |
 | GitLab Duo flow and code review on merge request !1 | real sessions that posted comments (see the merge request) |
 | External AI provider | mocked in unit tests; **real call only if** `AI_PROVIDER`, `AI_API_KEY` and `AI_MODEL` are set as masked CI/CD variables; **otherwise unverified** |
-| App-to-GitLab Flows API request, GitHub import and publishing | fake transports only: **unverified** |
+| GitLab Duo triage of an uploaded project's findings | a real agent session (10115413) answered from a goal written in the app's format, using only the findings; the app's own HTTP client and trace parsing are verified with stand-in transports only |
+| Existing catalog flow on a repository merge request | real session (10114123) posted a triage comment; the app's own client is verified with stand-in transports only |
+| GitHub import and publishing | fake transports only: **unverified** |
 | Real deployment, continuous monitoring, Semgrep inside the app | not implemented |
 | Browser look and feel, hosted deployment | not verified |
 
