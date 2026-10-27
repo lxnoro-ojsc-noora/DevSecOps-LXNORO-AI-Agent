@@ -1,20 +1,74 @@
 # DevSecOps LXNORO AI Agent
 
-A Streamlit security command center (GitLab Transcend hackathon). It scans a source ZIP or a public GitHub repository with real engines, lets an optional AI orchestrator prioritise findings and propose fixes, applies **only low-risk fixes automatically**, and **requires a named human approval for every high-risk or AI-proposed change**. Uploaded code is never executed.
+**Secure code. Controlled remediation. Human-approved decisions.**
 
-MIT License. Copyright (c) 2026 NOORA AL-MAOLAI, Research Center: LXNORO OJSC.
+A Streamlit security command center built for the GitLab Transcend hackathon. It scans a source ZIP or a public GitHub repository with real static engines, optionally uses AI to explain and prioritise the findings, applies **only low-risk fixes automatically** and **requires a named human approval for every high or critical change and every AI-proposed change**. Uploaded code is never executed.
 
-## Run
+- Repository: https://gitlab.com/gitlab-ai-hackathon/transcend-october-2026/43725688/showcase
+- License: [MIT](https://gitlab.com/gitlab-ai-hackathon/transcend-october-2026/43725688/showcase/-/blob/main/LICENSE)
+- Hosted demo: **not available / not verified** (no demo URL is configured in this repository)
+
+## Overview
+
+**Problem.** Scanners produce long finding lists. Teams must decide which findings are real, which matter most and which fixes are safe to apply. Automated fixers can change behaviour without review, and AI suggestions can be wrong or can leak secrets into prompts. Manual triage is slow, and nothing records who approved what.
+
+**Solution.** The agent separates *finding* from *fixing*. Deterministic scanners are authoritative. AI is advisory and treated as untrusted until its output passes deterministic checks. Low-risk fixes may be applied automatically. Anything riskier waits for a named human, and every decision lands in an audit trail.
+
+**Intended users.** Developers and security reviewers who want a quick, transparent first pass over a Python-centric project, and a controlled path from findings to a corrected copy of the code.
+
+## Key features
+
+- **Intake:** ZIP upload (up to 25 MB) or public GitHub repository import by URL.
+- **Analysis:** built-in rules, Bandit (Python SAST) and OSV.dev advisories for pinned PyPI requirements. A check that could not run is shown as *unavailable* and is listed in the report.
+- **Report:** risk level, strengths, weaknesses, severity, redacted evidence and a prioritised remediation plan, downloadable as JSON or Markdown, plus a manual GitLab Duo hand-off brief.
+- **AI-assisted triage:** optional external model provider (explanations, triage, candidate fixes) and a GitLab Duo Agent Platform session that receives **redacted findings, never source code**.
+- **Policy-gated remediation:** diffs, an approval queue and an audit trail. Auto-apply only when severity is below high **and** the fixer is classed low risk.
+- **Re-scan comparison:** on-demand rescan against the deployment baseline (new, resolved, remaining).
+- **Export:** corrected project ZIP, and GitHub publishing to a new branch plus pull request when configured.
+- **Simulation mode:** the whole workflow runs with no credentials, with simulated parts labelled.
+
+## The seven stages and how data moves
+
+1. **Intake:** a ZIP or a GitHub archive is read in memory by `safe_zip`. Text files, binary files and skipped entries (with reasons) become the project.
+2. **Analysis:** the text files go through the built-in rules, Bandit and OSV.dev (`pipeline.run_scans`). The result is a list of findings plus a list of checks, each marked performed, skipped or unavailable. An AI provider can add explanations or a Duo triage session.
+3. **Report:** findings and checks become a structured report. AI text sits in a separately labelled section and never changes deterministic findings.
+4. **Remediation:** each finding with a deterministic fixer becomes a planned change with a diff. Low-risk changes can be applied automatically. The rest wait for a named approver. AI candidate fixes join the same queue and always need approval.
+5. **Export:** the corrected files are zipped for download. GitHub publishing creates a new branch and a pull request.
+6. **Deploy (simulation only):** a policy gate, package digest and security scan are computed. Build, release and health check are simulated and labelled.
+7. **Rescan:** a fresh scan is compared with the deployment baseline. New findings go through the same approval rules.
+
+## What makes it distinctive
+
+- **Transparent status:** simulated, unavailable and skipped are shown as such. Live mode never falls back to simulation after an error.
+- **Human oversight:** approvals need a named approver and are enforced in `remediation.apply_remediations`, not only in the UI.
+- **Secret redaction:** evidence is redacted before display, reporting, export or any AI request. Secret-bearing lines are never sent to a model.
+- **Untrusted AI:** model output is parsed strictly, ids are checked against real findings, and a candidate fix must be one line, free of secret-like text, compile (never executed) and no longer be flagged by the scanner.
+
+## Technology stack
+
+Python, Streamlit, Bandit, OSV.dev (public batch API), `requests`, GitLab Duo Agent Platform (Flows API and AI Catalog flow), GitHub REST API, pytest and GitLab CI (SAST and Secret Detection templates). Pinned versions are in `requirements.txt` (`streamlit`, `requests`, `bandit`). pytest is installed by the CI job.
+
+## Setup and usage
+
+**Prerequisites.** Python 3 and `pip`. CI uses the `python:3.12-slim` image. Other Python versions were not tested here.
 
 ```
 pip install -r requirements.txt
 streamlit run app.py          # http://localhost:8501
-python -m pytest -q           # mocked and unit tests (live tests are excluded)
+python -m pytest -q           # unit and headless UI tests; tests marked live are excluded
 ```
 
-Simulation mode, the built-in rules, Bandit and OSV.dev need no credentials.
+These commands are the ones CI uses (`pip install` and `pytest`). Starting the app locally was not re-run for this README update.
 
-## Configuration (Live mode)
+Simulation mode, the built-in rules, Bandit and OSV.dev need no credentials. The app opens in Live mode by default. Switch the mode at the top of the page. Switching resets the workflow.
+
+Command-line scan with the built-in rules only (static, nothing executed):
+
+```
+python -m devsecops_agent.cli <path> [--exclude <dir>] [--out report.json] [--fail-on-high]
+```
+
+### Configuration (Live mode)
 
 Settings are read from Streamlit secrets (`.streamlit/secrets.toml`, which is git-ignored, or the secrets panel of your host) or from environment variables. Never type secrets into the UI and never commit them.
 
@@ -43,74 +97,95 @@ AI_API_KEY = "<your-api-key>"
 AI_MODEL = "<model-id>"
 ```
 
-## Live and Simulation mode (selector at the top of the page)
+## Live and Simulation mode
 
 | | LIVE | SIMULATION |
 |---|---|---|
-| Scanners | built-in rules, **Bandit**, **OSV.dev** (network) | built-in rules, Bandit, labelled offline advisory fixture |
+| Scanners | built-in rules, **Bandit**, **OSV.dev** (network) | built-in rules, Bandit, labelled offline advisory fixture (not real advisories) |
 | AI | your configured provider only; no key means "unavailable" | deterministic templates, labelled SIMULATED, not a model |
 | Intake | ZIP upload, public GitHub import | the above plus a built-in demo project |
 | GitHub publishing / GitLab AI | available when configured | disabled: no external changes |
-| Deployment | **simulation only** (no deployment provider exists) | simulation |
+| Deployment | **simulation only** | simulation |
 
-Both modes share the same approval, validation and audit rules. Live mode never falls back to simulation after an error; switching mode resets the workflow.
+Both modes share the same approval, validation and audit rules.
 
-## The seven stages
+## Architecture
 
-1. **Intake**: hardened in-memory ZIP handling; public GitHub archive import.
-2. **Analysis**: built-in rules, Bandit (run as a subprocess, no shell, private temp dir, timeout; it parses code, never runs it), OSV.dev for pinned PyPI requirements. Missing tools or failed requests show as *unavailable*, and the report lists every check that did not run.
-3. **Report**: risk level, strengths, weaknesses, plan; JSON/Markdown with a separately labelled AI section; manual GitLab Duo hand-off brief.
-4. **Remediation**: diffs, approval queue, audit trail. Auto-apply only when severity is below high and the fixer is low risk. AI candidates always need approval (enforced in `remediation.apply_remediations`). A finding is marked "Fix available" only when a deterministic fixer can really rewrite its line.
-5. **Export**: corrected ZIP; GitHub publishing (new branch and pull request only) when configured. Stage-7 fixes update this canonical project; simulated drift files are never exported.
-6. **Deploy**: simulation only; gate, package digest and scan are computed, the rest is simulated.
-7. **Rescan**: on-demand comparison with the deployment baseline (new, resolved, remaining) and an optional AI interpretation. Not continuous monitoring.
+| Path | Role |
+|---|---|
+| `app.py` | Streamlit entry point for the seven stages. `.streamlit/config.toml` sets the dark theme. |
+| `dashboard/` | Views, components, theme and session state (`state.py`). Security decisions are not made here. |
+| `devsecops_agent/safe_zip.py`, `intake.py` | Safe in-memory archive handling; ZIP and GitHub intake. |
+| `devsecops_agent/scanners.py`, `engines.py`, `pipeline.py` | Built-in rules, Bandit and OSV.dev adapters, combined scan. |
+| `devsecops_agent/remediation.py` | Approval policy, fixers, decisions, audit log. |
+| `devsecops_agent/orchestrator.py`, `ai/` | AI triage and candidate fixes; external provider and GitLab Duo clients. |
+| `devsecops_agent/report.py`, `export.py` | Report building (JSON, Markdown, Duo brief); corrected ZIP and diffs. |
+| `devsecops_agent/github_io.py` | GitHub archive import and branch plus pull request publishing. |
+| `devsecops_agent/deploy.py`, `monitor.py` | Deployment simulation; rescan history and comparison. |
+| `devsecops_agent/cli.py`, `demo.py` | Command-line scan; built-in demo project. |
+| `tests/` | pytest suite. |
+| `.gitlab/duo/`, `skills/` | Duo flow source, merge-request review instructions, agent skill. |
 
-## AI orchestration
+## Security and limitations
 
-`devsecops_agent/orchestrator.py` asks the model for triage, candidate fixes and summaries, and treats every answer as untrusted: strict JSON parsing, ids checked against real findings, secrets redacted, and each candidate fix must be one line, free of secret-like text, compile (never executed), no longer be flagged by the deterministic scanner, and pass named human approval. Secret-bearing lines are never sent to the model.
+- **Safe ZIP handling:** archives are read in memory; nothing is extracted to disk. Absolute paths, `..` traversal and NUL bytes reject the archive. Limits: 25 MB archive, 3000 entries, 2 MB per file, 50 MB total, and a compression-ratio check against ZIP bombs. Symlinks, encrypted entries, duplicates, oversize files and VCS or dependency directories (`.git`, `node_modules`, `venv` and similar) are skipped, listed with reasons and left out of the exported ZIP.
+- **No execution:** uploaded code is never run, imported or evaluated. Bandit parses files and is started without a shell, with a minimal environment, a timeout (90 s), a file cap (500) and a private temporary directory.
+- **Secrets:** evidence is redacted. `.streamlit/secrets.toml` and `.env` are git-ignored. The GitLab and GitHub clients scrub tokens from error text.
+- **Approval gates:** high or critical severity, any fixer not classed low risk and every AI candidate need a named approver. Simulated drift files are never exported.
+- **GitHub publishing:** creates a new branch and a pull request, never force-pushes and refuses the default branch.
+- **Scope:** static, pattern-based checks. No finding does not prove the code is secure.
 
-**External API provider** (`devsecops_agent/ai/`): set `AI_PROVIDER`, `AI_API_KEY` and `AI_MODEL` as described above. The UI offers a connection test that makes one real request.
+## Current implementation status
 
-**GitLab Duo Agent Platform provider** (asynchronous, the output lives in GitLab, no external model key). Choose "GitLab Duo Agent Platform" in the Analysis stage; two separate cards can appear:
+| Area | Status |
+|---|---|
+| Intake, Analysis, Report, Remediation, Export (ZIP) | Implemented and covered by unit and headless UI tests |
+| **Deploy** | **Simulation only.** Nothing is built, deployed or hosted. Build, release and health check are simulated and labelled. |
+| **Rescan** | On-demand comparison with the deployment baseline. **Continuous monitoring is not implemented.** |
+| Netlify (or any real deployment) adapter | **Not implemented** |
+| Real post-deployment health checks | **Not implemented** |
+| Rescan verification that targeted findings were fixed | **Not implemented** (rescan compares with the deployment baseline only) |
+| Security report inside the exported ZIP | **Not implemented.** The report is a separate JSON or Markdown download. |
+| Semgrep inside the app | Not implemented (Semgrep appears only as a CI job) |
 
-- **GitLab Duo triage of the uploaded project**: sends the current analysis' redacted findings (rule, severity, file and line, redacted evidence, summary counts; never code) to a read-only foundational agent session. The agent is told it cannot read the uploaded files and must not describe this repository, so the answer is advice on the findings, not a code review. The card shows the real session status and the agent's final answer read from the session trace, and ties both to the current analysis: a new analysis, project or mode switch clears them.
-- **Repository merge-request flow (not your upload)**: shown only when `GITLAB_AI_CONSUMER_ID` is set. It starts the AI Catalog flow already enabled in the project, which triages the CI security findings (`self-scan` report) of a merge request of the configured GitLab project, and displays the comment that flow posts. It does not analyse the project uploaded to the app. The catalog flow cannot take findings: its prompt, stored in the AI Catalog, treats the goal as a merge-request reference.
+The open merge request for a Netlify adapter was empty when this README was written. Do not read it as delivered.
 
-**Uploaded project through the catalog flow (opt-in):** with `GITLAB_AI_CONSUMER_ID` and `GITLAB_AI_UPLOAD_FLOW=1`, the first card starts the catalog flow instead of the agent. The redacted findings travel in the `goal`, behind the first line `UPLOADED-PROJECT-FINDINGS`; the flow answers in its final answer, with no tools and no comment, and the app reads that answer from the session's own trace. This works only after you paste the updated `.gitlab/duo/flows/devsecops-triage-remediate.yaml` into the AI Catalog flow (the app cannot edit it). Without the flag the read-only agent is used. A session that is not finished after 30 minutes is reported as stopped waiting; the app never shows a comment from another merge request.
-
-Candidate fixes and per-finding explanations still use the external provider, because a Duo session is not a synchronous completion API.
-
-## GitLab Duo flow and skill
-
-- `skills/devsecops-triage-remediate/SKILL.md` is the agent skill: triage order, the fixer table and the approval policy.
-- `.gitlab/duo/flows/devsecops-triage-remediate.yaml` is the custom flow source. GitLab does not load it automatically: create the flow in the AI Catalog (paste the YAML), enable it in the project, then mention its service account in a merge request comment.
-- The flow reads the `self-scan` CI artifact of the merge request pipeline and posts one comment of proposals. It cannot commit, merge or approve.
-- `.gitlab/duo/mr-review-instructions.yaml` and `AGENTS.md` configure GitLab Duo code review for this repository.
-
-## Verified versus unverified
+### Verified versus unverified
 
 | Capability | Evidence |
 |---|---|
 | Scanner, remediation gates, export, secret redaction, approvals, audit, stage-7 export consistency | unit and headless UI tests in CI |
 | Whole seven-stage UI flow, both modes, AI orchestration wiring | headless `AppTest` with a stand-in provider (wiring only) |
 | Bandit | really executed in CI tests |
-| OSV.dev | mocked in unit tests; **real query in the `live-integration` CI job**, skipped with a reason if the network is unreachable |
-| GitLab Duo flow and code review on merge request !1 | real sessions that posted comments (see the merge request) |
-| External AI provider | mocked in unit tests; **real call only if** `AI_PROVIDER`, `AI_API_KEY` and `AI_MODEL` are set as masked CI/CD variables; **otherwise unverified** |
-| GitLab Duo triage of an uploaded project's findings | a real agent session (10115413) answered from a goal written in the app's format, using only the findings; the app's own HTTP client and trace parsing are verified with stand-in transports only |
-| Existing catalog flow on a repository merge request | real session (10114123) posted a triage comment; the app's own client is verified with stand-in transports only |
-| Uploaded findings through the catalog flow (`GITLAB_AI_UPLOAD_FLOW`) | stand-in transports only; **unverified** against GitLab until the catalog flow is updated and a real session is run |
-| Fine-grained token (`create_duo_workflow` + `read_duo_workflow`) | per GitLab's docs, `GET /ai/duo_workflows/workflows/:id` is unavailable to fine-grained tokens, so the app shows the session status as "unknown" and reads only the trace; a partial message is labelled as such. Whether a session can be created and read with exactly these two permissions is **unverified** until a live session is run |
-| GitHub import and publishing | fake transports only: **unverified** |
-| Real deployment, continuous monitoring, Semgrep inside the app | not implemented |
-| Browser look and feel, hosted deployment | not verified |
+| OSV.dev | mocked in unit tests; a real query is attempted in the `live-integration` CI job, which skips with a reason if the network is unreachable |
+| GitLab Duo flow and code review on merge request !1 | real sessions that posted comments, as recorded in the merge request |
+| External AI provider | mocked in unit tests; **unverified live** unless `AI_PROVIDER`, `AI_API_KEY` and `AI_MODEL` are set as masked CI/CD variables |
+| GitLab Duo triage of an uploaded project's findings | a real agent session answered from a goal in the app's format; the app's own HTTP client and trace parsing are verified with stand-in transports only |
+| Existing catalog flow on a repository merge request | a real session posted a triage comment; the app's own client is verified with stand-in transports only |
+| Uploaded findings through the catalog flow (`GITLAB_AI_UPLOAD_FLOW`) | stand-in transports only; **unverified** until the catalog flow is updated and a real session is run |
+| Fine-grained token (`create_duo_workflow` + `read_duo_workflow`) | GitLab documents the session-status endpoint as unavailable to fine-grained tokens, so the app shows status "unknown" and reads only the trace. Whether a session can be created and read with exactly these two permissions is **unverified** |
+| GitHub import and publishing | fake transports only: **unverified live** |
+| Hosted app, browser look and feel | **not verified** |
 
-To verify live AI in CI, add masked CI/CD variables `AI_PROVIDER`, `AI_API_KEY`, `AI_MODEL`, then read the `live-integration` job log.
+### GitLab Duo integration
 
-## Known limitation: deployment
+- **Triage of the uploaded project:** in Live mode, choose "GitLab Duo Agent Platform" in the Analysis stage. The redacted findings (rule, severity, file and line, redacted evidence, counts) go to a read-only agent session. The agent cannot read the uploaded files, so the answer is advice on the findings, not a code review. The card shows the real session status and the answer read from the session trace.
+- **Repository merge-request flow:** shown only when `GITLAB_AI_CONSUMER_ID` is set. It runs the AI Catalog flow already enabled in the project on a merge request of that project. It does not analyse your upload.
+- **Opt-in upload flow:** with `GITLAB_AI_CONSUMER_ID` and `GITLAB_AI_UPLOAD_FLOW=1`, findings go to the catalog flow. This works only after you paste the updated `.gitlab/duo/flows/devsecops-triage-remediate.yaml` into the AI Catalog flow, which the app cannot do. Without the flag the read-only agent is used.
+- Candidate fixes and per-finding explanations use the external provider, because a Duo session is asynchronous.
+- A session unfinished after 30 minutes is reported as stopped waiting.
 
-This tool analyses and repairs code; it does not host it. Stage 6 computes a policy gate, a package digest and a scan, and labels build, release and health check as simulated. A real deployment step would need a target platform and its credentials.
+## Verification (CI)
 
-## Repository
+`.gitlab-ci.yml` defines these jobs:
 
-`.gitlab-ci.yml` runs pytest, SAST, Secret Detection, `self-scan` and `live-integration`. Dependencies are pinned in `requirements.txt` to the versions CI uses.
+- `unit-tests` (required): the pytest suite with mocked or stand-in transports and headless UI tests.
+- SAST and Secret Detection: GitLab templates, allowed to fail.
+- `self-scan`: the built-in scanner over this repository only, allowed to fail.
+- `live-integration` (allowed to fail): tests marked `live`. A green result does not show that a live integration works, because tests skip with a reason when credentials or network are missing. Read the job log to see what really ran.
+
+A green pipeline therefore proves the unit and UI tests passed. It does not prove the live GitHub, external AI or Duo upload paths.
+
+## License
+
+MIT License. Copyright (c) 2026 NOORA AL-MAOLAI, Research Center: LXNORO OJSC. See [LICENSE](LICENSE).
