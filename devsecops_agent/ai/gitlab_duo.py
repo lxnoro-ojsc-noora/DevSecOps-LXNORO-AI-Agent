@@ -131,13 +131,6 @@ def gitlab_status(get) -> ProviderStatus:
     )
 
 
-def chat_api_status() -> ProviderStatus:
-    return ProviderStatus(
-        "gitlab-chat", "GitLab Duo Chat API", "gitlab", "unsupported",
-        "The Chat completions REST endpoint is documented as internal-only on GitLab.com; applications cannot use it.",
-    )
-
-
 def _call(cfg: GitLabAIConfig, method: str, path: str, payload=None, http=None):
     http = http or requests
     headers = {"PRIVATE-TOKEN": cfg.token, "Content-Type": "application/json"}
@@ -171,13 +164,15 @@ def check_access(cfg: GitLabAIConfig, http=None):
         _call(cfg, "GET", f"{FLOWS}/agent_privileges", http=http)
         return True, ("Token is accepted by the GitLab Duo Flows API (read). Creating a session is only proven "
                       "when one starts.")
-    except GitLabAIError:
-        pass
+    except GitLabAIError as exc:
+        privileges_error = str(exc)
     try:
         data = _call(cfg, "GET", f"/api/v4/projects/{cfg.project_id}", http=http).json()
     except GitLabAIError as exc:
-        return False, str(exc)
-    return True, f"Token can read project {data.get('path_with_namespace', cfg.project_id)}."
+        return False, (f"Flows API read check (agent_privileges): {privileges_error} | "
+                       f"Project read check: {exc}")
+    return True, (f"Token can read project {data.get('path_with_namespace', cfg.project_id)}. The Flows API read "
+                  f"check failed ({privileges_error}), so session creation is unverified until one starts.")
 
 
 def build_goal(findings, limit: int = 12, context: dict | None = None) -> str:

@@ -75,7 +75,7 @@ def view_intake() -> None:
 
 
 def _provider_grid(statuses, selected: str) -> str:
-    icons = {"none": "shield", "external": "cpu", "gitlab": "link", "gitlab-chat": "lock"}
+    icons = {"none": "shield", "external": "cpu", "gitlab": "link"}
     tones = {"ready": ("ok", "READY"), "unconfigured": ("warn", "NOT CONFIGURED"), "unsupported": ("bad", "UNSUPPORTED")}
     cards = []
     for s in statuses:
@@ -102,7 +102,7 @@ def _gitlab_card() -> None:
                    "review. The session runs asynchronously in GitLab CI and uses your GitLab Duo quota. The answer shown "
                    "here belongs to the current analysis only.")
         c1, c2 = st.columns(2)
-        c1.button("Test GitLab access", on_click=gitlab_test, icon=":material/lock_open:", key="gl_test")
+        c1.button("Test GitLab Flows API access", on_click=gitlab_test, icon=":material/lock_open:", key="gl_test")
         c2.button("Send findings to GitLab Duo", on_click=duo_submit, icon=":material/send:",
                   type="primary", key="gl_submit", disabled=S.scan is None)
         if S.gitlab_ok:

@@ -126,7 +126,7 @@ def test_registry_lists_all_options_with_truthful_states():
     statuses = {s.id: s for s in ai.provider_statuses({}.get)}
     assert statuses["none"].state == "ready"
     assert statuses["external"].state == "unconfigured" and statuses["gitlab"].state == "unconfigured"
-    assert statuses["gitlab-chat"].state == "unsupported"
+    assert "gitlab-chat" not in statuses
     full = {**GL, "AI_PROVIDER": "anthropic", "AI_API_KEY": "k", "AI_MODEL": "m"}
     both = {s.id: s for s in ai.provider_statuses(full.get)}
     assert both["external"].state == "ready" and both["gitlab"].state == "ready"
