@@ -12,6 +12,34 @@ streamlit run app.py          # http://localhost:8501
 python -m pytest -q           # mocked and unit tests (live tests are excluded)
 ```
 
+Simulation mode, the built-in rules, Bandit and OSV.dev need no credentials.
+
+## Configuration (Live mode)
+
+Settings are read from Streamlit secrets (`.streamlit/secrets.toml`, which is git-ignored, or the secrets panel of your host) or from environment variables. Never type secrets into the UI and never commit them.
+
+| Setting | Needed for | Notes |
+|---|---|---|
+| `AI_PROVIDER` | AI explanations, triage, candidate fixes | `anthropic`, `gemini`, `openai` or `openai-compatible` |
+| `AI_API_KEY` | same | your provider key |
+| `AI_MODEL` | same | model id from your provider |
+| `AI_ENDPOINT` | optional, OpenAI-compatible servers | https URL; default `https://api.openai.com/v1` |
+| `GITHUB_TOKEN` | Publish to GitHub | fine-grained token with contents and pull-request write access to one repository |
+| `PUBLISH_KEY` | Publish to GitHub | shared key a user must type before publishing |
+| `PUBLISH_REPO` | Publish to GitHub | `owner/repository`, the fixed target |
+| `GITLAB_AI_TOKEN` | GitLab Duo triage session | token allowed to create Duo sessions in the project |
+| `GITLAB_AI_PROJECT_ID` | GitLab Duo triage session | numeric project id |
+| `GITLAB_URL` | optional | https; default `https://gitlab.com` |
+| `GITLAB_AI_WORKFLOW_DEFINITION` | optional | default `security_analyst_agent/v1` |
+
+Example `.streamlit/secrets.toml` (placeholders only):
+
+```toml
+AI_PROVIDER = "anthropic"
+AI_API_KEY = "<your-api-key>"
+AI_MODEL = "<model-id>"
+```
+
 ## Live and Simulation mode (selector at the top of the page)
 
 | | LIVE | SIMULATION |
@@ -27,9 +55,9 @@ Both modes share the same approval, validation and audit rules. Live mode never 
 ## The seven stages
 
 1. **Intake**: hardened in-memory ZIP handling; public GitHub archive import.
-2. **Analysis**: built-in rules, Bandit (run as a subprocess, no shell, private temp dir, timeout; it parses code, never runs it), OSV.dev for pinned PyPI requirements. Missing tools or failed requests show as *unavailable*.
+2. **Analysis**: built-in rules, Bandit (run as a subprocess, no shell, private temp dir, timeout; it parses code, never runs it), OSV.dev for pinned PyPI requirements. Missing tools or failed requests show as *unavailable*, and the report lists every check that did not run.
 3. **Report**: risk level, strengths, weaknesses, plan; JSON/Markdown with a separately labelled AI section; manual GitLab Duo hand-off brief.
-4. **Remediation**: diffs, approval queue, audit trail. Auto-apply only when severity is below high and the fixer is low risk. AI candidates always need approval (enforced in `remediation.apply_remediations`).
+4. **Remediation**: diffs, approval queue, audit trail. Auto-apply only when severity is below high and the fixer is low risk. AI candidates always need approval (enforced in `remediation.apply_remediations`). A finding is marked "Fix available" only when a deterministic fixer can really rewrite its line.
 5. **Export**: corrected ZIP; GitHub publishing (new branch and pull request only) when configured. Stage-7 fixes update this canonical project; simulated drift files are never exported.
 6. **Deploy**: simulation only; gate, package digest and scan are computed, the rest is simulated.
 7. **Rescan**: on-demand comparison with the deployment baseline (new, resolved, remaining) and an optional AI interpretation. Not continuous monitoring.
@@ -38,14 +66,16 @@ Both modes share the same approval, validation and audit rules. Live mode never 
 
 `devsecops_agent/orchestrator.py` asks the model for triage, candidate fixes and summaries, and treats every answer as untrusted: strict JSON parsing, ids checked against real findings, secrets redacted, and each candidate fix must be one line, free of secret-like text, compile (never executed), no longer be flagged by the deterministic scanner, and pass named human approval. Secret-bearing lines are never sent to the model.
 
-**Primary provider: external API** (`devsecops_agent/ai/`), configured with Streamlit secrets or environment variables, never in the UI:
+**External API provider** (`devsecops_agent/ai/`): set `AI_PROVIDER`, `AI_API_KEY` and `AI_MODEL` as described above. The UI offers a connection test that makes one real request.
 
-- `AI_PROVIDER`: `anthropic`, `gemini`, or `openai` (any OpenAI-compatible server)
-- `AI_API_KEY`, `AI_MODEL`, and for `openai` an optional https `AI_ENDPOINT`
+**GitLab Duo Agent Platform provider**: submits a read-only triage session through the Flows API (asynchronous; the output lives in GitLab).
 
-**Optional: GitLab Duo Agent Platform** uses the documented, experimental Flows API to submit a read-only, asynchronous triage session (live mode only): `GITLAB_AI_TOKEN`, `GITLAB_AI_PROJECT_ID`, optional `GITLAB_URL`, `GITLAB_AI_WORKFLOW_DEFINITION`. The Duo Chat completions API is internal-only on GitLab.com and is not used.
+## GitLab Duo flow and skill
 
-**GitHub publishing** needs `GITHUB_TOKEN` (fine-grained, one repository), `PUBLISH_REPO` (`owner/repo`) and `PUBLISH_KEY`; it refuses the default branch and never force-pushes.
+- `skills/devsecops-triage-remediate/SKILL.md` is the agent skill: triage order, the fixer table and the approval policy.
+- `.gitlab/duo/flows/devsecops-triage-remediate.yaml` is the custom flow source. GitLab does not load it automatically: create the flow in the AI Catalog (paste the YAML), enable it in the project, then mention its service account in a merge request comment.
+- The flow reads the `self-scan` CI artifact of the merge request pipeline and posts one comment of proposals. It cannot commit, merge or approve.
+- `.gitlab/duo/mr-review-instructions.yaml` and `AGENTS.md` configure GitLab Duo code review for this repository.
 
 ## Verified versus unverified
 
@@ -54,14 +84,19 @@ Both modes share the same approval, validation and audit rules. Live mode never 
 | Scanner, remediation gates, export, secret redaction, approvals, audit, stage-7 export consistency | unit and headless UI tests in CI |
 | Whole seven-stage UI flow, both modes, AI orchestration wiring | headless `AppTest` with a stand-in provider (wiring only) |
 | Bandit | really executed in CI tests |
-| OSV.dev | mocked in unit tests; **real query only in the `live-integration` CI job**, skipped with a reason if the network is unreachable |
-| External AI provider | mocked in unit tests; **real call only if** the AI variables are set in CI; **otherwise unverified** |
-| GitLab Flows API, GitHub publishing | fake transports only: **unverified** |
-| Real deployment, continuous monitoring, Semgrep in the app | not implemented |
-| Browser look and feel, Streamlit Community Cloud | not verified |
+| OSV.dev | mocked in unit tests; **real query in the `live-integration` CI job**, skipped with a reason if the network is unreachable |
+| GitLab Duo flow and code review on merge request !1 | real sessions that posted comments (see the merge request) |
+| External AI provider | mocked in unit tests; **real call only if** `AI_PROVIDER`, `AI_API_KEY` and `AI_MODEL` are set as masked CI/CD variables; **otherwise unverified** |
+| App-to-GitLab Flows API request, GitHub import and publishing | fake transports only: **unverified** |
+| Real deployment, continuous monitoring, Semgrep inside the app | not implemented |
+| Browser look and feel, hosted deployment | not verified |
 
 To verify live AI in CI, add masked CI/CD variables `AI_PROVIDER`, `AI_API_KEY`, `AI_MODEL`, then read the `live-integration` job log.
 
+## Known limitation: deployment
+
+This tool analyses and repairs code; it does not host it. Stage 6 computes a policy gate, a package digest and a scan, and labels build, release and health check as simulated. A real deployment step would need a target platform and its credentials.
+
 ## Repository
 
-`.gitlab-ci.yml` runs pytest, SAST, Secret Detection, `self-scan` and `live-integration`. `.gitlab/duo/mr-review-instructions.yaml` and `AGENTS.md` configure GitLab Duo for this repository.
+`.gitlab-ci.yml` runs pytest, SAST, Secret Detection, `self-scan` and `live-integration`. Dependencies are pinned in `requirements.txt` to the versions CI uses.
