@@ -15,7 +15,7 @@ from .icons import svg
 from .ai_panel import ai_markdown, render_ai_panel, render_ai_report_section
 from .state import (
     S, cfg_get, current_report, goto, gitlab_refresh, gitlab_submit, gitlab_test, load_demo, load_project,
-    run_analysis, safe_name,
+    run_analysis, safe_name, gitlab_flow_enabled, gitlab_run_flow, gitlab_refresh_flow,
 )
 
 
@@ -117,6 +117,46 @@ def _gitlab_card() -> None:
                     st.text(chunk)
 
 
+def _gitlab_flow_card() -> None:
+    from devsecops_agent.scanners import redact
+
+    cfg = ai_mod.load_gitlab_config(cfg_get)
+    with st.container(border=True):
+        C.section("GitLab Duo flow",
+                  "Runs the flow already enabled in your GitLab project. No external model key is used.", "link")
+        st.caption("The flow triages the CI security findings (the self-scan report) of a merge request in the configured "
+                   "GitLab project and posts one comment, which this card reads back. It does not analyse the project you "
+                   "uploaded here. It runs asynchronously in GitLab CI and uses your GitLab Duo quota.")
+        st.text_input("Merge request number", value=cfg.mr_iid if cfg else "", key="gl_mr", max_chars=9,
+                      placeholder="for example 2")
+        c1, c2 = st.columns(2)
+        c1.button("Test GitLab access", on_click=gitlab_test, icon=":material/lock_open:", key="gl_test")
+        c2.button("Run the GitLab flow", on_click=gitlab_run_flow, icon=":material/play_arrow:", type="primary",
+                  key="gl_run")
+        if S.gitlab_ok:
+            st.success(S.gitlab_ok)
+        if S.gitlab_msg:
+            st.error(S.gitlab_msg)
+        sess = S.gitlab_session
+        if sess and S.gitlab_kind == "flow":
+            tone, label = ai_mod.describe_status(sess.status)
+            link = f' - <a href="{C.esc(sess.web_url)}" target="_blank">open session in GitLab</a>' if sess.web_url else ""
+            C.md(f'<div class="lx-q">{C.badge("Session " + str(sess.id), "info", "link")}{C.badge(label, tone)}'
+                 f'<span class="loc">Merge request !{C.esc(S.gitlab_mr)}{link}</span></div>')
+            st.button("Refresh status and result", on_click=gitlab_refresh_flow, icon=":material/refresh:",
+                      key="gl_refresh_flow")
+            if sess.status not in ai_mod.TERMINAL and ai_mod.session_age_minutes(sess) > ai_mod.SLOW_AFTER_MINUTES:
+                st.warning(f"The session has not finished after {ai_mod.SLOW_AFTER_MINUTES} minutes. Open it in GitLab "
+                           "to see where it is waiting.")
+            res = S.gitlab_result
+            if res:
+                C.md(f'<div class="lx-q">{C.badge("LIVE: comment posted by the GitLab Duo flow", "ok", "sparkles")}'
+                     f'<span class="loc">{C.esc(res.author)} - {C.esc(res.created_at)}</span></div>')
+                if res.note_url:
+                    st.markdown(f"[Open the comment in GitLab]({res.note_url})")
+                st.markdown(redact(res.body)[:6000])
+
+
 def view_analysis() -> None:
     C.hero("Security Analysis", "Deterministic checks are authoritative. AI explanations are optional, advisory and clearly labelled.",
            "radar", "STAGE 02")
@@ -159,7 +199,7 @@ def view_analysis() -> None:
             C.md(C.sev_bar(summary["counts"]))
             C.md(C.check_grid(scan.checks))
     if S.mode == "live" and choice == "gitlab" and by_id["gitlab"].state == "ready":
-        _gitlab_card()
+        _gitlab_flow_card() if gitlab_flow_enabled() else _gitlab_card()
     with st.container(border=True):
         C.section("Findings", "Every finding is traceable to a rule, file and line. Evidence is redacted.", "bug")
         sel = st.segmented_control("Severity filter", list(SEVERITY_ORDER), selection_mode="multi",

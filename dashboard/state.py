@@ -19,6 +19,7 @@ from devsecops_agent.ai import llm
 from devsecops_agent.demo import demo_project
 from devsecops_agent.models import Check, utc_now
 from devsecops_agent.safe_zip import UnsafeArchiveError
+from devsecops_agent.scanners import redact
 from devsecops_agent.pipeline import run_scans
 
 S = st.session_state
@@ -50,7 +51,7 @@ def _defaults() -> dict:
         "logged5": set(), "apply5": None, "gh_access": None, "gh_result": None, "audit": [],
         "gitlab_session": None, "gitlab_output": [], "gitlab_msg": "", "gitlab_ok": "", "sim_paths": set(),
         "ai_health": None, "ai_triage": None, "ai_fixes": None, "ai_validation": None, "ai_rescan": None,
-        "ai_msg": "", "base_plan": [],
+        "ai_msg": "", "base_plan": [], "gitlab_result": None, "gitlab_kind": "", "gitlab_mr": "",
     }
 
 
@@ -129,6 +130,12 @@ def ai_section() -> dict:
     if S.ai_rescan:
         out["rescan_interpretation"] = {"origin": _origin(S.ai_rescan), "provider": S.ai_rescan.label,
                                         "text": S.ai_rescan.text}
+    if S.gitlab_result and S.gitlab_session:
+        out["gitlab_duo_flow"] = {
+            "origin": "live",
+            "provider": f"GitLab Duo flow, session {S.gitlab_session.id} (merge request !{S.gitlab_mr} of the configured project)",
+            "text": redact(S.gitlab_result.body)[:3000],
+        }
     return out
 
 
@@ -208,6 +215,7 @@ def run_analysis(provider_id: str) -> None:
     S.corrected, S.zip_bytes, S.residual = None, None, None
     S.deployment, S.live_files, S.baseline, S.history = None, None, None, []
     S.gitlab_session, S.gitlab_output, S.gitlab_msg, S.gitlab_ok = None, [], "", ""
+    S.gitlab_result, S.gitlab_kind, S.gitlab_mr = None, "", ""
     S.ai_triage, S.ai_fixes, S.ai_validation, S.ai_rescan, S.ai_msg = None, None, None, None, ""
     S.base_plan = list(S.plan)
     remediation.audit_event(S.audit, "system", "analysis_completed", "analysis",
@@ -247,6 +255,54 @@ def gitlab_refresh() -> None:
         S.gitlab_session = ai_mod.get_session(cfg, S.gitlab_session.id)
         S.gitlab_output = ai_mod.get_output(cfg, S.gitlab_session.id)
         S.gitlab_msg = ""
+    except ai_mod.GitLabAIError as exc:
+        S.gitlab_msg = str(exc)
+
+
+def gitlab_flow_enabled() -> bool:
+    cfg = ai_mod.load_gitlab_config(cfg_get)
+    return bool(cfg and cfg.consumer_id)
+
+
+def gitlab_run_flow() -> None:
+    """Start the flow that is already enabled in GitLab. Live mode only; nothing is shown unless GitLab answered."""
+    cfg = ai_mod.load_gitlab_config(cfg_get)
+    if S.mode != "live" or not cfg or not cfg.consumer_id:
+        S.gitlab_msg = "The GitLab flow is not configured (GITLAB_AI_TOKEN, GITLAB_AI_PROJECT_ID, GITLAB_AI_CONSUMER_ID)."
+        return
+    try:
+        iid = ai_mod.parse_mr_iid(S.get("gl_mr") or cfg.mr_iid)
+        session = ai_mod.submit_flow(cfg, iid)
+    except ai_mod.GitLabAIError as exc:
+        S.gitlab_msg, S.gitlab_ok = str(exc), ""
+        return
+    S.gitlab_session, S.gitlab_kind, S.gitlab_mr = session, "flow", str(iid)
+    S.gitlab_result, S.gitlab_msg, S.gitlab_ok, S.gitlab_output = None, "", "", []
+    remediation.audit_event(S.audit, "system", "gitlab_session_submitted", "analysis",
+                            detail=f"Existing GitLab flow started as session {session.id} on merge request !{iid}")
+
+
+def gitlab_refresh_flow() -> None:
+    """Read the real session status and, once it finished, the comment the flow posted."""
+    cfg = ai_mod.load_gitlab_config(cfg_get)
+    old = S.gitlab_session
+    if not cfg or not old or S.gitlab_kind != "flow":
+        return
+    try:
+        session = ai_mod.get_session(cfg, old.id, started_at=old.started_at)
+        S.gitlab_session = session
+        S.gitlab_msg = ""
+        if session.status == "finished" and S.gitlab_result is None:
+            result = ai_mod.fetch_flow_result(cfg, session, S.gitlab_mr)
+            if result is None:
+                S.gitlab_msg = ("The session finished but no result comment was found on the merge request yet. "
+                                "Refresh again or open the session in GitLab.")
+            else:
+                S.gitlab_result = result
+                remediation.audit_event(S.audit, "system", "gitlab_flow_result", "analysis",
+                                        detail=f"Flow comment retrieved from merge request !{S.gitlab_mr} (session {session.id})")
+        elif session.status in ("failed", "stopped"):
+            S.gitlab_msg = f"The GitLab session ended with status {session.status}. Open it in GitLab for details."
     except ai_mod.GitLabAIError as exc:
         S.gitlab_msg = str(exc)
 
