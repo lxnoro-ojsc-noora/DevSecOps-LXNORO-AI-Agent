@@ -52,6 +52,7 @@ def _defaults() -> dict:
         "gitlab_session": None, "gitlab_output": [], "gitlab_msg": "", "gitlab_ok": "", "sim_paths": set(),
         "ai_health": None, "ai_triage": None, "ai_fixes": None, "ai_validation": None, "ai_rescan": None,
         "ai_msg": "", "base_plan": [], "gitlab_result": None, "gitlab_kind": "", "gitlab_mr": "",
+        "duo_session": None, "duo_answer": "", "duo_msg": "", "duo_scope": "",
     }
 
 
@@ -136,6 +137,13 @@ def ai_section() -> dict:
             "provider": f"GitLab Duo flow, session {S.gitlab_session.id} (merge request !{S.gitlab_mr} of the configured project)",
             "text": redact(S.gitlab_result.body)[:3000],
         }
+    if S.duo_answer and S.duo_session:
+        out["gitlab_duo_agent"] = {
+            "origin": "live",
+            "provider": (f"GitLab Duo agent session {S.duo_session.id}: advice on this project's scanner findings only; "
+                         "the agent could not read the code"),
+            "text": redact(S.duo_answer)[:3000],
+        }
     return out
 
 
@@ -216,6 +224,7 @@ def run_analysis(provider_id: str) -> None:
     S.deployment, S.live_files, S.baseline, S.history = None, None, None, []
     S.gitlab_session, S.gitlab_output, S.gitlab_msg, S.gitlab_ok = None, [], "", ""
     S.gitlab_result, S.gitlab_kind, S.gitlab_mr = None, "", ""
+    S.duo_session, S.duo_answer, S.duo_msg, S.duo_scope = None, "", "", ""
     S.ai_triage, S.ai_fixes, S.ai_validation, S.ai_rescan, S.ai_msg = None, None, None, None, ""
     S.base_plan = list(S.plan)
     remediation.audit_event(S.audit, "system", "analysis_completed", "analysis",
@@ -226,37 +235,52 @@ def run_analysis(provider_id: str) -> None:
 def gitlab_test() -> None:
     cfg = ai_mod.load_gitlab_config(cfg_get)
     if not cfg:
-        S.gitlab_msg, S.gitlab_ok = "GitLab AI is not configured.", ""
+        S.duo_msg, S.gitlab_ok = "GitLab AI is not configured.", ""
         return
     ok, message = ai_mod.check_access(cfg)
-    S.gitlab_ok, S.gitlab_msg = (message, "") if ok else ("", message)
+    S.gitlab_ok, S.duo_msg = (message, "") if ok else ("", message)
 
 
-def gitlab_submit() -> None:
+def duo_submit() -> None:
+    """Send the uploaded project's redacted findings to a read-only GitLab Duo agent session (live mode only)."""
     cfg = ai_mod.load_gitlab_config(cfg_get)
-    if not cfg or not S.scan:
-        S.gitlab_msg = "GitLab AI is not configured or there is no scan to triage."
+    if S.mode != "live" or not cfg or not S.scan or not S.project:
+        S.duo_msg = "GitLab Duo is not configured or there is no analysis to send (GITLAB_AI_TOKEN, GITLAB_AI_PROJECT_ID)."
         return
+    context = ai_mod.upload_context(S.project.name, S.project.source, len(S.project.text_files), S.mode, S.scan)
     try:
-        session = ai_mod.submit_triage(cfg, S.scan.findings)
+        session = ai_mod.submit_triage(cfg, S.scan.findings, context=context)
     except ai_mod.GitLabAIError as exc:
-        S.gitlab_msg, S.gitlab_ok = str(exc), ""
+        S.duo_msg = str(exc)
         return
-    S.gitlab_session, S.gitlab_msg, S.gitlab_output = session, "", []
+    S.duo_session, S.duo_answer, S.duo_msg, S.gitlab_ok = session, "", "", ""
+    S.duo_scope = f"{context['project']}, {len(S.scan.findings)} finding(s)"
     remediation.audit_event(S.audit, "system", "gitlab_session_submitted", "analysis",
-                            detail=f"Read-only Duo session {session.id} ({session.status or 'unknown status'})")
+                            detail=f"Findings of {context['project']} sent to read-only Duo agent session {session.id}")
 
 
-def gitlab_refresh() -> None:
+def duo_refresh() -> None:
+    """Read the real session status and, once it finished, the agent's final answer from the session trace."""
     cfg = ai_mod.load_gitlab_config(cfg_get)
-    if not cfg or not S.gitlab_session:
+    old = S.duo_session
+    if not cfg or not old:
         return
     try:
-        S.gitlab_session = ai_mod.get_session(cfg, S.gitlab_session.id)
-        S.gitlab_output = ai_mod.get_output(cfg, S.gitlab_session.id)
-        S.gitlab_msg = ""
+        session = ai_mod.get_session(cfg, old.id, started_at=old.started_at)
+        S.duo_session = session
+        S.duo_msg = ""
+        if session.status == "finished" and not S.duo_answer:
+            answer = ai_mod.get_final_answer(cfg, session.id)
+            if answer:
+                S.duo_answer = answer
+                remediation.audit_event(S.audit, "system", "gitlab_duo_answer", "analysis",
+                                        detail=f"Answer retrieved from Duo agent session {session.id}")
+            else:
+                S.duo_msg = "The session finished but its trace has no answer text. Open the session in GitLab."
+        elif session.status in ("failed", "stopped"):
+            S.duo_msg = f"The GitLab session ended with status {session.status}. Open it in GitLab for details."
     except ai_mod.GitLabAIError as exc:
-        S.gitlab_msg = str(exc)
+        S.duo_msg = str(exc)
 
 
 def gitlab_flow_enabled() -> bool:
