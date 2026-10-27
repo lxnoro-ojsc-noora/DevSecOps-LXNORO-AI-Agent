@@ -100,6 +100,7 @@ Candidate fixes and per-finding explanations still use the external provider, be
 | GitLab Duo triage of an uploaded project's findings | a real agent session (10115413) answered from a goal written in the app's format, using only the findings; the app's own HTTP client and trace parsing are verified with stand-in transports only |
 | Existing catalog flow on a repository merge request | real session (10114123) posted a triage comment; the app's own client is verified with stand-in transports only |
 | Uploaded findings through the catalog flow (`GITLAB_AI_UPLOAD_FLOW`) | stand-in transports only; **unverified** against GitLab until the catalog flow is updated and a real session is run |
+| Fine-grained token (`create_duo_workflow` + `read_duo_workflow`) | per GitLab's docs, `GET /ai/duo_workflows/workflows/:id` is unavailable to fine-grained tokens, so the app shows the session status as "unknown" and reads only the trace; a partial message is labelled as such. Whether a session can be created and read with exactly these two permissions is **unverified** until a live session is run |
 | GitHub import and publishing | fake transports only: **unverified** |
 | Real deployment, continuous monitoring, Semgrep inside the app | not implemented |
 | Browser look and feel, hosted deployment | not verified |
