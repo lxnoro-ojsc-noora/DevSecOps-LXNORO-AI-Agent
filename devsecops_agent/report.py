@@ -10,8 +10,20 @@ WEIGHTS = {"critical": 10, "high": 6, "medium": 3, "low": 1, "info": 0}
 LIMITATIONS = (
     "Static, pattern-based checks only; no project code is executed, so runtime behaviour is not tested.",
     "Absence of findings does not prove absence of vulnerabilities.",
-    "Dependency CVE lookups and external SAST engines (Semgrep, Bandit) were not run by this app.",
 )
+
+
+def limitations_for(scan: ScanResult) -> list[str]:
+    """Fixed caveats plus one line per check that did not run, taken from the scan itself."""
+    out = list(LIMITATIONS)
+    for c in scan.checks:
+        if c.name.startswith("AI "):
+            continue  # AI status has its own line in the report
+        if c.status == "unavailable":
+            out.append(f"{c.name}: not run. {c.detail}".strip())
+        elif c.status == "skipped" and c.name.startswith("Dependency advisories"):
+            out.append(f"{c.name}: skipped. {c.detail}".strip())
+    return out
 
 
 def risk_score(findings) -> int:
@@ -39,7 +51,7 @@ def build_report(project_name: str, scan: ScanResult, ai_notes: dict | None = No
         weaknesses.append(f"{hc} high/critical finding(s) require human-approved remediation")
     if counts["medium"]:
         weaknesses.append(f"{counts['medium']} medium-severity finding(s)")
-    limitations = list(LIMITATIONS)
+    limitations = limitations_for(scan)
     if ai_notes:
         limitations.append(
             f"AI explanations come from {ai_label}, can be wrong, and never change deterministic findings."
