@@ -34,6 +34,11 @@ _PLACEHOLDER = re.compile(
     r"(?i)(change.?me|your[_-]|example|placeholder|dummy|x{4,}|<[^>]*>|\$\{|%\(|\*{3,}|\[redacted\])"
 )
 
+# Shape of line the deterministic secret fixer can rewrite (remediation._fix_hardcoded uses the same shape).
+SIMPLE_ASSIGN = re.compile(
+    r"""^(\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*=\s*)(["'])[^"'\r\n]+\4(\s*(?:#.*)?)$"""
+)
+
 _SECRET_EXPL = "A credential-like value is stored directly in source code."
 _SECRET_IMPACT = (
     "Anyone with repository access (including history and forks) can reuse it. "
@@ -187,13 +192,14 @@ def _secret_finding(path: str, n: int, line: str, ext: str):
             return _finding(
                 rule_id, f"Hard-coded secret: {label}", "critical", path, n, line,
                 _SECRET_EXPL, _SECRET_IMPACT, _SECRET_FIX,
-                fixable=(ext in PY_EXT and rule_id != "SEC-PRIVATE-KEY"),
+                fixable=(ext in PY_EXT and rule_id != "SEC-PRIVATE-KEY" and bool(SIMPLE_ASSIGN.match(line))),
             )
     m = _GENERIC_SECRET.search(line)
     if m and not _PLACEHOLDER.search(m.group(3)):
         return _finding(
             "SEC-HARDCODED", "Hard-coded credential", "high", path, n, line,
-            _SECRET_EXPL, _SECRET_IMPACT, _SECRET_FIX, fixable=ext in PY_EXT,
+            _SECRET_EXPL, _SECRET_IMPACT, _SECRET_FIX,
+            fixable=(ext in PY_EXT and bool(SIMPLE_ASSIGN.match(line))),
         )
     return None
 

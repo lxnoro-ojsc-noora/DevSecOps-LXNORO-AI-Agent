@@ -14,8 +14,8 @@ from . import components as C
 from .icons import svg
 from .ai_panel import ai_markdown, render_ai_panel, render_ai_report_section
 from .state import (
-    S, cfg_get, current_report, goto, gitlab_refresh, gitlab_submit, gitlab_test, load_demo, load_project,
-    run_analysis, safe_name,
+    S, cfg_get, current_report, goto, duo_refresh, duo_submit, gitlab_test, load_demo, load_project,
+    run_analysis, safe_name, gitlab_flow_enabled, gitlab_run_flow, gitlab_refresh_flow,
 )
 
 
@@ -75,7 +75,7 @@ def view_intake() -> None:
 
 
 def _provider_grid(statuses, selected: str) -> str:
-    icons = {"none": "shield", "external": "cpu", "gitlab": "link", "gitlab-chat": "lock"}
+    icons = {"none": "shield", "external": "cpu", "gitlab": "link"}
     tones = {"ready": ("ok", "READY"), "unconfigured": ("warn", "NOT CONFIGURED"), "unsupported": ("bad", "UNSUPPORTED")}
     cards = []
     for s in statuses:
@@ -91,30 +91,76 @@ def _provider_grid(statuses, selected: str) -> str:
 
 
 def _gitlab_card() -> None:
+    from devsecops_agent.scanners import redact
+
     with st.container(border=True):
-        C.section("GitLab Duo Agent Platform triage",
-                  "Asynchronous, read-only session that runs inside GitLab. Not a synchronous API.", "link")
-        st.caption("Submits a redacted summary of the findings as a Flows API session (read-only privileges). It runs in "
-                   "GitLab CI, uses your GitLab Duo quota, and its output appears in GitLab. Plan, permissions and "
-                   "availability are enforced by GitLab and are only known after a request succeeds.")
+        C.section("GitLab Duo triage of the uploaded project",
+                  "Sends this project's redacted findings to a read-only GitLab Duo agent session. No external model key.",
+                  "link")
+        st.caption("Only the scanner findings (rule, severity, file:line, redacted evidence) and summary counts are sent. "
+                   "The agent cannot read your uploaded files, so its answer is advice on those findings, not a code "
+                   "review. The session runs asynchronously in GitLab CI and uses your GitLab Duo quota. The answer shown "
+                   "here belongs to the current analysis only.")
         c1, c2 = st.columns(2)
-        c1.button("Test GitLab access", on_click=gitlab_test, icon=":material/lock_open:", key="gl_test")
-        c2.button("Submit read-only triage session", on_click=gitlab_submit, icon=":material/send:",
+        c1.button("Test GitLab Flows API access", on_click=gitlab_test, icon=":material/lock_open:", key="gl_test")
+        c2.button("Send findings to GitLab Duo", on_click=duo_submit, icon=":material/send:",
                   type="primary", key="gl_submit", disabled=S.scan is None)
         if S.gitlab_ok:
             st.success(S.gitlab_ok)
+        if S.duo_msg:
+            st.error(S.duo_msg)
+        sess = S.duo_session
+        if sess:
+            tone, label = ai_mod.describe_status(sess.status)
+            link = f' - <a href="{C.esc(sess.web_url)}" target="_blank">open session in GitLab</a>' if sess.web_url else ""
+            C.md(f'<div class="lx-q">{C.badge("Session " + str(sess.id), "info", "link")}{C.badge(label, tone)}'
+                 f'<span class="loc">Findings of {C.esc(S.duo_scope)} via GitLab Duo {C.esc(S.duo_via or "agent")}{link}</span></div>')
+            st.button("Refresh status and answer", on_click=duo_refresh, icon=":material/refresh:", key="gl_refresh")
+            if sess.status not in ai_mod.TERMINAL and ai_mod.session_age_minutes(sess) > ai_mod.SLOW_AFTER_MINUTES:
+                st.warning(f"The session has not finished after {ai_mod.SLOW_AFTER_MINUTES} minutes. Open it in GitLab "
+                           "to see where it is waiting.")
+            if S.duo_answer:
+                label = ("LIVE: latest agent message (completion not confirmed)" if S.duo_partial
+                         else "LIVE: answer from the GitLab Duo agent")
+                C.md(f'<div class="lx-q">{C.badge(label, "warn" if S.duo_partial else "ok", "sparkles")}'
+                     '<span class="loc">Advice on the findings above; the agent could not read the code.</span></div>')
+                st.markdown(redact(S.duo_answer)[:6000])
+
+
+def _gitlab_flow_card() -> None:
+    from devsecops_agent.scanners import redact
+
+    cfg = ai_mod.load_gitlab_config(cfg_get)
+    with st.container(border=True):
+        C.section("Repository merge-request flow (not your upload)",
+                  "Runs the flow already enabled in your GitLab project on a merge request of that project.", "link")
+        st.caption("The flow triages the CI security findings (the self-scan report) of a merge request in the configured "
+                   "GitLab project and posts one comment, which this card reads back. It does not analyse the project you "
+                   "uploaded here. It runs asynchronously in GitLab CI and uses your GitLab Duo quota.")
+        st.text_input("Merge request number", value=cfg.mr_iid if cfg else "", key="gl_mr", max_chars=9,
+                      placeholder="for example 2")
+        st.button("Run the repository merge-request flow", on_click=gitlab_run_flow, icon=":material/play_arrow:",
+                  type="primary", key="gl_run")
         if S.gitlab_msg:
             st.error(S.gitlab_msg)
         sess = S.gitlab_session
-        if sess:
+        if sess and S.gitlab_kind == "flow":
+            tone, label = ai_mod.describe_status(sess.status)
             link = f' - <a href="{C.esc(sess.web_url)}" target="_blank">open session in GitLab</a>' if sess.web_url else ""
-            C.md(f'<div class="lx-q">{C.badge("Session " + str(sess.id), "info", "link")}'
-                 f'{C.badge(sess.status or "status unknown", "warn")}<span class="loc">Submitted{link}</span></div>')
-            st.button("Refresh status and output", on_click=gitlab_refresh, icon=":material/refresh:", key="gl_refresh")
-            if S.gitlab_output:
-                st.caption("Raw session output (advisory; experimental trace API, format not verified):")
-                for chunk in S.gitlab_output:
-                    st.text(chunk)
+            C.md(f'<div class="lx-q">{C.badge("Session " + str(sess.id), "info", "link")}{C.badge(label, tone)}'
+                 f'<span class="loc">Merge request !{C.esc(S.gitlab_mr)}{link}</span></div>')
+            st.button("Refresh status and result", on_click=gitlab_refresh_flow, icon=":material/refresh:",
+                      key="gl_refresh_flow")
+            if sess.status not in ai_mod.TERMINAL and ai_mod.session_age_minutes(sess) > ai_mod.SLOW_AFTER_MINUTES:
+                st.warning(f"The session has not finished after {ai_mod.SLOW_AFTER_MINUTES} minutes. Open it in GitLab "
+                           "to see where it is waiting.")
+            res = S.gitlab_result
+            if res:
+                C.md(f'<div class="lx-q">{C.badge("LIVE: comment posted by the GitLab Duo flow", "ok", "sparkles")}'
+                     f'<span class="loc">{C.esc(res.author)} - {C.esc(res.created_at)}</span></div>')
+                if res.note_url:
+                    st.markdown(f"[Open the comment in GitLab]({res.note_url})")
+                st.markdown(redact(res.body)[:6000])
 
 
 def view_analysis() -> None:
@@ -160,6 +206,8 @@ def view_analysis() -> None:
             C.md(C.check_grid(scan.checks))
     if S.mode == "live" and choice == "gitlab" and by_id["gitlab"].state == "ready":
         _gitlab_card()
+        if gitlab_flow_enabled():
+            _gitlab_flow_card()
     with st.container(border=True):
         C.section("Findings", "Every finding is traceable to a rule, file and line. Evidence is redacted.", "bug")
         sel = st.segmented_control("Severity filter", list(SEVERITY_ORDER), selection_mode="multi",
